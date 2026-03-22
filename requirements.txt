@@ -4,3 +4,5 @@ html2text
 ddgs
 playwright
 playwright-stealth
+fastapi
+uvicorn
