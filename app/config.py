@@ -10,6 +10,7 @@ LLM_URL: str = os.getenv("API_URL", "http://localhost:11434/api/chat")
 LLM_TOKEN: str = os.getenv("API_TOKEN", "")
 LLM_MODEL: str = os.getenv("API_MODEL", "huihui_ai/qwen3.5-abliterated:4b")
 LLM_CTX: int = int(os.getenv("API_CTX", "8192"))
+LLM_THINK: bool = os.getenv("API_THINK", "false").lower() in ("1", "true", "yes")
 
 # Paths
 WORKSPACE_DIR: str = os.path.join(os.path.dirname(__file__), "workspace")

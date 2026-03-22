@@ -5,7 +5,7 @@ Dependency Inversion: depends on LLMPort protocol, not a concrete client.
 """
 
 import json
-from app.config import LLM_CTX, MAX_TOOL_ROUNDS, MAX_SILENT_RETRIES, MAX_LOOP_DETECT
+from app.config import LLM_CTX, LLM_THINK, MAX_TOOL_ROUNDS, MAX_SILENT_RETRIES, MAX_LOOP_DETECT
 from app.llm.port import LLMPort
 from app.tools import registry
 from app.agent import display, context
@@ -145,7 +145,7 @@ async def run_turn(llm: LLMPort, user_input: str, history: list[dict]) -> list[d
     for _ in range(MAX_TOOL_ROUNDS):
         messages = context.trim(messages)
 
-        chunks = llm.chat(messages, stream=True, think=False, tools=tools)
+        chunks = llm.chat(messages, stream=True, think=LLM_THINK, tools=tools)
         assistant_msg, tool_calls = await _collect_stream(chunks)
         messages.append(assistant_msg)
 
