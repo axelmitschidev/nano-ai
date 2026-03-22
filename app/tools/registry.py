@@ -10,35 +10,34 @@ _definitions: list[dict] = []
 
 
 def register(name: str, fn: Callable, description: str, parameters: dict):
-    """Register a tool with its function and schema definition."""
+    """Register a tool. Skips if already registered (idempotent)."""
+    if name in _tools:
+        return
     _tools[name] = fn
     _definitions.append({
         "type": "function",
         "function": {
             "name": name,
             "description": description,
-            "parameters": parameters,
+            "parameters": {**parameters, "additionalProperties": False},
         },
     })
 
 
 def get_definitions() -> list[dict]:
-    """Return all tool definitions for the LLM payload."""
     return _definitions
 
 
 def get_fn(name: str) -> Callable | None:
-    """Get a tool function by name."""
     return _tools.get(name)
 
 
 def list_names() -> list[str]:
-    """Return all registered tool names."""
     return list(_tools.keys())
 
 
 def validate(tool_call: dict) -> tuple[bool, str | None]:
-    """Validate a tool call before execution. Returns (is_valid, error_message)."""
+    """Validate a tool call before execution."""
     func = tool_call.get("function", {})
     name = func.get("name")
     args = func.get("arguments", {})
@@ -49,7 +48,6 @@ def validate(tool_call: dict) -> tuple[bool, str | None]:
     if name not in _tools:
         return False, f"ERROR: Unknown tool '{name}'. Available: {', '.join(_tools.keys())}"
 
-    # Check required arguments
     for defn in _definitions:
         if defn["function"]["name"] == name:
             required = defn["function"]["parameters"].get("required", [])
@@ -62,7 +60,7 @@ def validate(tool_call: dict) -> tuple[bool, str | None]:
 
 
 def execute(tool_call: dict) -> str:
-    """Validate and execute a tool call. Returns the result string."""
+    """Validate and execute a tool call."""
     is_valid, error = validate(tool_call)
     if not is_valid:
         return error

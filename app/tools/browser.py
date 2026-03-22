@@ -9,7 +9,7 @@ from ddgs import DDGS
 from app.tools import registry
 
 _stealth = Stealth()
-_session = {"pw": None, "browser": None, "page": None}
+_session = {"pw": None, "browser": None, "context": None, "page": None}
 
 
 # --- Browser lifecycle ---
@@ -35,20 +35,24 @@ def _ensure_browser():
     _stealth.use_sync(context)
     page = context.new_page()
 
-    _session.update(pw=pw, browser=browser, page=page)
+    _session.update(pw=pw, browser=browser, context=context, page=page)
     return page
 
 
 def close_browser():
-    """Shut down the browser and free resources."""
+    """Shut down the browser and free all resources."""
+    for key in ("context", "browser"):
+        try:
+            if _session[key]:
+                _session[key].close()
+        except Exception:
+            pass
     try:
-        if _session["browser"]:
-            _session["browser"].close()
         if _session["pw"]:
             _session["pw"].stop()
     except Exception:
         pass
-    _session.update(pw=None, browser=None, page=None)
+    _session.update(pw=None, browser=None, context=None, page=None)
 
 
 # --- Helpers ---
@@ -132,7 +136,6 @@ def web_search(query: str, max_results: int = 5) -> str:
 
 def web_read(url: str) -> str:
     def _do():
-        # Lightweight httpx first
         try:
             res = httpx.get(url, timeout=10, follow_redirects=True, headers={
                 "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36"
@@ -144,7 +147,6 @@ def web_read(url: str) -> str:
         except Exception:
             pass
 
-        # Fallback: full browser
         page = _ensure_browser()
         page.goto(url, wait_until="domcontentloaded", timeout=15000)
         page.wait_for_timeout(2000)
@@ -169,22 +171,20 @@ def web_go(url: str) -> str:
 
 
 def web_click(selector: str) -> str:
-    try:
+    def _do():
         page = _ensure_browser()
         page.click(selector, timeout=5000)
         page.wait_for_timeout(1500)
         return f"Clicked. Page: {page.title()}\nURL: {page.url}\n\nElements:\n{_get_elements(page)}"
-    except Exception as e:
-        return f"ERROR clicking '{selector}': {e}"
+    return _retry(_do)
 
 
 def web_type(selector: str, text: str) -> str:
-    try:
+    def _do():
         page = _ensure_browser()
         page.fill(selector, text, timeout=5000)
         return f"Typed '{text}' into {selector}."
-    except Exception as e:
-        return f"ERROR typing into '{selector}': {e}"
+    return _retry(_do)
 
 
 # --- Registration ---
@@ -209,7 +209,7 @@ def register_tools():
         }, "required": ["url"]})
 
     registry.register("web_click", web_click,
-        "Click an element on the current page. Use the selector from web_go results.",
+        "Click an element on the current page.",
         {"type": "object", "properties": {
             "selector": {"type": "string", "description": "CSS selector of element to click"},
         }, "required": ["selector"]})
