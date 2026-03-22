@@ -1,0 +1,24 @@
+name: Deploy to main
+
+on:
+  pull_request:
+    types: [closed]
+    branches: [main]
+
+jobs:
+  deploy:
+    if: github.event.pull_request.merged == true
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build Docker image
+        run: docker build -t nano-ai .
+
+      - name: Tag release
+        env:
+          SHA: ${{ github.sha }}
+        run: |
+          SHORT_SHA="${SHA:0:7}"
+          git tag "v1.0.0-${SHORT_SHA}"
+          git push origin "v1.0.0-${SHORT_SHA}"
