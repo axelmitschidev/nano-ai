@@ -9,7 +9,7 @@ services:
       - ./scripts:/scripts
     entrypoint: ["/bin/bash", "/scripts/ollama-entrypoint.sh"]
     environment:
-      - OLLAMA_MODEL=qwen3.5:4b
+      - OLLAMA_MODEL=huihui_ai/qwen3.5-abliterated:4b
     restart: unless-stopped
     healthcheck:
       test: ["CMD", "curl", "-sf", "http://localhost:11434/api/tags"]
@@ -27,7 +27,7 @@ services:
         condition: service_healthy
     environment:
       - API_URL=http://ollama:11434/api/chat
-      - API_MODEL=qwen3.5:4b
+      - API_MODEL=huihui_ai/qwen3.5-abliterated:4b
       - API_CTX=32768
     volumes:
       - ./app/workspace:/app/app/workspace
