@@ -21,7 +21,7 @@ Autonomous AI agent running locally on Ollama. Lightweight, private, extensible.
 docker compose up -d
 ```
 
-That's it. Ollama starts, pulls `qwen3.5:4b` automatically, then the agent API is available at `http://localhost:8000`.
+That's it. Ollama starts, pulls `huihui_ai/qwen3.5-abliterated:4b` automatically, then the agent API is available at `http://localhost:8000`.
 
 ### API usage
 
@@ -69,7 +69,7 @@ app/
 | Variable | Default | Description |
 |----------|---------|-------------|
 | `API_URL` | `http://localhost:11434/api/chat` | Ollama endpoint |
-| `API_MODEL` | `qwen3.5:4b` | Model to use |
+| `API_MODEL` | `huihui_ai/qwen3.5-abliterated:4b` | Model to use |
 | `API_CTX` | `4096` | Context window size |
 | `API_TOKEN` | — | Auth token (optional) |
 
