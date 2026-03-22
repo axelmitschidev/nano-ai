@@ -12,10 +12,11 @@ services:
       - OLLAMA_MODEL=huihui_ai/qwen3.5-abliterated:4b
     restart: unless-stopped
     healthcheck:
-      test: ["CMD", "ollama", "list"]
-      interval: 10s
-      timeout: 5s
-      retries: 30
+      test: ["CMD-SHELL", "ollama list | grep -q qwen3.5-abliterated"]
+      interval: 15s
+      timeout: 10s
+      retries: 60
+      start_period: 30s
 
   agent:
     build: .
