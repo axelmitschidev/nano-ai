@@ -62,6 +62,14 @@ class SessionStore:
     def remove(self, session_id: str) -> None:
         self._sessions.pop(session_id, None)
 
+    def get(self, session_id: str) -> Session | None:
+        """Retrieve an existing session without creating one."""
+        session = self._sessions.get(session_id)
+        if session and session.is_expired():
+            del self._sessions[session_id]
+            return None
+        return session
+
     @property
     def count(self) -> int:
         return len(self._sessions)

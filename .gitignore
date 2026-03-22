@@ -7,4 +7,5 @@ app/workspace/*
 app/logs/*
 !app/logs/.gitkeep
 .DS_Store
+.nano-session
 .claude/

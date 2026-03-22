@@ -3,6 +3,7 @@
 Open/Closed: new tools are added via register(), no modification needed.
 """
 
+import inspect
 from typing import Callable
 
 _tools: dict[str, Callable] = {}
@@ -59,8 +60,8 @@ def validate(tool_call: dict) -> tuple[bool, str | None]:
     return True, None
 
 
-def execute(tool_call: dict) -> str:
-    """Validate and execute a tool call."""
+async def execute(tool_call: dict) -> str:
+    """Validate and execute a tool call (supports sync and async tools)."""
     is_valid, error = validate(tool_call)
     if not is_valid:
         return error
@@ -70,7 +71,10 @@ def execute(tool_call: dict) -> str:
     fn = _tools[name]
 
     try:
-        return fn(**args)
+        result = fn(**args)
+        if inspect.isawaitable(result):
+            result = await result
+        return result
     except TypeError as e:
         return f"ERROR: Bad arguments for '{name}': {e}"
     except Exception as e:

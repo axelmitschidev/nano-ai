@@ -4,12 +4,22 @@ Single Responsibility: runs the message loop, dispatches tools, detects loops.
 Dependency Inversion: depends on LLMPort protocol, not a concrete client.
 """
 
+import asyncio
 import json
 from app.config import LLM_CTX, LLM_THINK, MAX_TOOL_ROUNDS, MAX_SILENT_RETRIES, MAX_LOOP_DETECT
 from app.llm.port import LLMPort
 from app.tools import registry
 from app.agent import display, context
 from app.logger.logger import log_thinking, log_tool, log_response, log_error
+
+
+EventSink = asyncio.Queue | None
+
+
+def _emit(sink: EventSink, event: str, data: dict) -> None:
+    """Push an event to the sink if one is active (non-blocking)."""
+    if sink is not None:
+        sink.put_nowait({"event": event, "data": data})
 
 
 def _try_parse_text_tool_call(text: str) -> dict | None:
@@ -46,7 +56,7 @@ def _detect_loop(tool_calls_history: list[str], tool_call: dict) -> bool:
     return recent.count(key) >= MAX_LOOP_DETECT
 
 
-async def _collect_stream(chunks) -> tuple[dict, list[dict]]:
+async def _collect_stream(chunks, sink: EventSink = None) -> tuple[dict, list[dict]]:
     """Consume the async LLM stream, display in real-time, return (message, tool_calls)."""
     thinking_started = False
     responding_started = False
@@ -58,6 +68,7 @@ async def _collect_stream(chunks) -> tuple[dict, list[dict]]:
         if chunk.get("error"):
             display.print_tool_error(chunk["error"])
             log_error(chunk["error"], context="llm")
+            _emit(sink, "tool_error", {"error": chunk["error"]})
             continue
 
         if chunk.get("done"):
@@ -69,6 +80,7 @@ async def _collect_stream(chunks) -> tuple[dict, list[dict]]:
                 stats["ctx_pct"] = round(chunk["prompt_eval_count"] / LLM_CTX * 100)
             if stats:
                 display.print_stats(stats.get("tps", 0), stats.get("tok", 0), stats.get("ctx_pct", 0))
+                _emit(sink, "stats", stats)
             continue
 
         if "message" not in chunk:
@@ -87,6 +99,7 @@ async def _collect_stream(chunks) -> tuple[dict, list[dict]]:
                 thinking_started = True
                 display.print_thinking_start()
             display.print_thinking(thinking)
+            _emit(sink, "thinking", {"text": thinking})
 
         if content:
             full_content += content
@@ -94,6 +107,7 @@ async def _collect_stream(chunks) -> tuple[dict, list[dict]]:
                 responding_started = True
                 display.print_response_start()
             display.print_response(content)
+            _emit(sink, "response", {"text": content})
 
     if full_thinking:
         log_thinking(full_thinking)
@@ -112,30 +126,40 @@ async def _collect_stream(chunks) -> tuple[dict, list[dict]]:
     return assistant_msg, tool_calls
 
 
-def _execute_tool(tool_call: dict) -> str:
+async def _execute_tool(tool_call: dict, sink: EventSink = None) -> str:
     """Validate, execute, display, and log a single tool call."""
     is_valid, error = registry.validate(tool_call)
     if not is_valid:
         display.print_tool_error(error)
         log_error(error, context="validation")
+        _emit(sink, "tool_error", {"error": error})
         return error
 
     name = tool_call["function"]["name"]
     args = tool_call["function"]["arguments"]
 
     display.print_tool_call(name, args)
-    result = registry.execute(tool_call)
+    _emit(sink, "tool_call", {"name": name, "args": args})
+
+    result = await registry.execute(tool_call)
 
     if result.startswith("ERROR"):
         display.print_tool_error(result)
+        _emit(sink, "tool_error", {"error": result})
     else:
         display.print_tool_result(result)
+        _emit(sink, "tool_result", {"result": result[:500]})
 
     log_tool(name, args, result)
     return result
 
 
-async def run_turn(llm: LLMPort, user_input: str, history: list[dict]) -> list[dict]:
+async def run_turn(
+    llm: LLMPort,
+    user_input: str,
+    history: list[dict],
+    event_sink: EventSink = None,
+) -> list[dict]:
     """Run a single user turn: prompt → (tool loop) → response. Returns updated history."""
     messages = [*history, {"role": "user", "content": user_input}]
     tools = registry.get_definitions()
@@ -146,7 +170,7 @@ async def run_turn(llm: LLMPort, user_input: str, history: list[dict]) -> list[d
         messages = context.trim(messages)
 
         chunks = llm.chat(messages, stream=True, think=LLM_THINK, tools=tools)
-        assistant_msg, tool_calls = await _collect_stream(chunks)
+        assistant_msg, tool_calls = await _collect_stream(chunks, event_sink)
         messages.append(assistant_msg)
 
         if not tool_calls:
@@ -171,12 +195,13 @@ async def run_turn(llm: LLMPort, user_input: str, history: list[dict]) -> list[d
             if _detect_loop(tool_calls_history, tc):
                 loop_msg = f"Loop detected: '{tc['function']['name']}' called {MAX_LOOP_DETECT} times with same args. Answer with what you have."
                 display.print_tool_error(loop_msg)
+                _emit(event_sink, "tool_error", {"error": loop_msg})
                 messages.append({"role": "user", "content": loop_msg})
                 log_error(loop_msg, context="loop_detection")
                 break
 
             tool_calls_history.append(tc_key)
-            result = _execute_tool(tc)
+            result = await _execute_tool(tc, event_sink)
             messages.append({"role": "tool", "content": str(result)})
     else:
         display.print_round_limit(MAX_TOOL_ROUNDS)
