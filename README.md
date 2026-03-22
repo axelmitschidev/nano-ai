@@ -1,8 +1,8 @@
 <p align="center">
-  <h1 align="center">nano-ai</h1>
-  <p align="center"><strong>Your own AI agent. Local. Private. Autonomous.</strong></p>
-  <p align="center">One command. No cloud. No API key. No limits.</p>
+  <img src="assets/banner.png" alt="nano-ai" width="600">
 </p>
+<p align="center"><strong>Your own AI agent. Local. Private. Autonomous.</strong></p>
+<p align="center">One command. No cloud. No API key. No limits.</p>
 
 <p align="center">
   <a href="https://github.com/axelmitschidev/nano-ai/stargazers"><img src="https://img.shields.io/github/stars/axelmitschidev/nano-ai?style=social" alt="Stars"></a>
