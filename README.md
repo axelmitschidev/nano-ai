@@ -24,8 +24,7 @@
 - **Write and run code** — creates Python/Bash/JS scripts and executes them autonomously
 - **Manage files** — sandboxed workspace for persistent storage and memory
 - **Remember** — persistent memory across sessions, learns and adapts
-- **Think** — chain-of-thought reasoning visible in real-time
-- **Use tools autonomously** — picks the right tool, handles errors, retries, adapts
+- **Use tools autonomously** — picks the right tool, handles errors, retries, detects loops
 
 All of this running locally on a **4B parameter model**. On a laptop. In a Docker container.
 
@@ -42,9 +41,13 @@ docker compose up -d
 That's it. Ollama starts, pulls the model, and the agent API is live at `http://localhost:8000`.
 
 ```bash
+# Chat with the agent
 curl -X POST http://localhost:8000/chat \
   -H "Content-Type: application/json" \
   -d '{"message": "search the web for the latest AI news and save a summary"}'
+
+# Response
+{"response": "I found and saved a summary of...", "session_id": "abc-123"}
 ```
 
 The agent will search the web, read articles, write a summary, and save it to its workspace. Autonomously.
@@ -57,25 +60,60 @@ The agent will search the web, read articles, write a summary, and save it to it
 User message
     |
     v
-[Agent Loop] ──> thinks (chain-of-thought)
-    |                |
-    |                v
-    |         picks a tool
-    |                |
-    |    ┌───────────┼───────────┐
-    |    v           v           v
-  [Files]      [Browser]     [Code]
-  read/write   search/click  run .py/.sh/.js
-    |           navigate
-    |           fill forms
-    |                |
-    └────────────────┘
+[Agent Loop]
     |
+    ├──> picks a tool
+    |        |
+    |    ┌───┼──────────┐
+    |    v   v          v
+    |  [Files]  [Browser]  [Code]
+    |    |        |          |
+    |    └────────┘──────────┘
+    |        |
+    |    tool result
+    |        |
+    ├──> picks another tool (if needed)
+    |        ...
     v
- Response (or call another tool)
+ Response
 ```
 
-The agent loops until the task is done. It handles errors, retries failed operations, and adapts its approach when something doesn't work.
+The agent loops until the task is done. It handles errors, retries failed operations, detects infinite loops, and manages its own context window.
+
+### Built-in safety
+
+- **Sandboxed workspace** — file operations restricted to the workspace directory
+- **Execution timeout** — scripts are killed after 30 seconds
+- **Context management** — sliding window prevents memory overflow
+- **Loop detection** — breaks out of repeated tool calls
+- **Retry with backoff** — web tools retry up to 3 times on failure
+
+---
+
+## API
+
+| Method | Route | Description |
+|--------|-------|-------------|
+| `POST` | `/chat` | `{"message": "...", "session_id": "..."}` → `{"response": "...", "session_id": "..."}` |
+| `POST` | `/reset` | Reset a conversation session |
+| `GET` | `/health` | Status check (agent + Ollama) |
+| `GET` | `/docs` | Interactive Swagger UI |
+
+### Sessions
+
+Each conversation gets a `session_id`. Pass it in subsequent requests to continue the conversation. Sessions expire after 1 hour of inactivity.
+
+```bash
+# Start a new conversation
+curl -X POST http://localhost:8000/chat \
+  -d '{"message": "hello"}'
+# {"response": "Hi!", "session_id": "abc-123"}
+
+# Continue the conversation
+curl -X POST http://localhost:8000/chat \
+  -d '{"message": "what did I just say?", "session_id": "abc-123"}'
+# {"response": "You said hello.", "session_id": "abc-123"}
+```
 
 ---
 
@@ -84,30 +122,27 @@ The agent loops until the task is done. It handles errors, retries failed operat
 ```
 app/
 ├── main.py              # CLI entry point
-├── server.py            # HTTP API (FastAPI)
-├── config.py            # Configuration
-├── agent/               # Core agent loop, context management, display
-├── llm/                 # Ollama client
-├── tools/               # Tool registry + implementations
+├── server.py            # HTTP API (FastAPI) with sessions
+├── config.py            # Centralized configuration
+├── agent/
+│   ├── agent.py         # Core agentic loop + loop detection
+│   ├── context.py       # Context window management
+│   ├── memory.py        # Persistent memory loader
+│   └── display.py       # Terminal UI (ANSI)
+├── llm/
+│   └── client.py        # Ollama API client
+├── tools/
+│   ├── registry.py      # Tool registry + validation (Open/Closed)
 │   ├── workspace.py     # File operations (sandboxed)
-│   ├── browser.py       # Stealth web browser
+│   ├── browser.py       # Stealth web browser + search
 │   └── system.py        # Code execution, date
-├── logger/              # JSONL audit logs
-└── prompts/             # System prompt
+├── logger/
+│   └── logger.py        # JSONL audit logs
+└── prompts/
+    └── system.md        # System prompt
 ```
 
-Clean architecture. SOLID principles. Every tool is a module — add your own in minutes.
-
----
-
-## API
-
-| Method | Route | Description |
-|--------|-------|-------------|
-| `POST` | `/chat` | `{"message": "..."}` → `{"response": "..."}` |
-| `POST` | `/reset` | Reset conversation |
-| `GET` | `/health` | Status check |
-| `GET` | `/docs` | Swagger UI |
+**Design:** DDD layers, SOLID principles. Every tool is a self-contained module — add your own by creating a file and calling `registry.register()`.
 
 ---
 
@@ -119,13 +154,44 @@ Clean architecture. SOLID principles. Every tool is a module — add your own in
 | `read_file` | Read files |
 | `list_files` | List workspace contents |
 | `delete_file` | Delete files or directories |
-| `run_file` | Execute .py, .sh, .js scripts |
+| `run_file` | Execute .py, .sh, .js scripts (30s timeout) |
 | `get_date` | Current date and time |
 | `web_search` | Search via DuckDuckGo |
-| `web_read` | Read a page as clean markdown |
+| `web_read` | Read a page as clean markdown (httpx first, Playwright fallback) |
 | `web_go` | Navigate and list interactive elements |
 | `web_click` | Click buttons, links |
 | `web_type` | Type into form fields |
+
+### Add your own tool
+
+Create a file in `app/tools/`, add your functions, then register them:
+
+```python
+# app/tools/my_tool.py
+from app.tools import registry
+
+def my_function(param: str) -> str:
+    return f"Result: {param}"
+
+def register_tools():
+    registry.register("my_function", my_function,
+        "Description of what it does.",
+        {"type": "object", "properties": {
+            "param": {"type": "string", "description": "What this param is"},
+        }, "required": ["param"]})
+```
+
+Then add it to `app/tools/__init__.py`:
+
+```python
+from app.tools import workspace, system, browser, my_tool
+
+def register_all():
+    workspace.register_tools()
+    system.register_tools()
+    browser.register_tools()
+    my_tool.register_tools()
+```
 
 ---
 
@@ -134,20 +200,22 @@ Clean architecture. SOLID principles. Every tool is a module — add your own in
 | Variable | Default | Description |
 |----------|---------|-------------|
 | `API_URL` | `http://localhost:11434/api/chat` | Ollama endpoint |
-| `API_MODEL` | `huihui_ai/qwen3.5-abliterated:4b` | Model |
-| `API_CTX` | `65536` | Context window |
+| `API_MODEL` | `huihui_ai/qwen3.5-abliterated:4b` | Model to use |
+| `API_CTX` | `65536` | Context window size (tokens) |
+| `API_TOKEN` | — | Auth token (optional, for remote LLMs) |
 
 ---
 
 ## Run without Docker
 
 ```bash
+# Install
 pip install -r requirements.txt
 playwright install chromium
-cp .env.example .env
+cp .env.example .env  # edit as needed
 
-# API mode
-uvicorn app.server:app --port 8000
+# API server
+uvicorn app.server:app --host 0.0.0.0 --port 8000
 
 # CLI mode
 python -m app.main
@@ -166,12 +234,16 @@ python -m app.main
 | **Code exec** | Yes, sandboxed | Restricted | Rare |
 | **Size** | 4B params, ~3GB | 200B+ params | 7-70B |
 | **Works offline** | Yes (except web tools) | No | Yes |
+| **Sessions** | Multi-session API | Varies | Usually single |
+| **Extensible** | Add tools in 1 file | No | Framework-dependent |
 
 ---
 
 ## Contributing
 
 PRs welcome. The tool registry is designed to be extended — add a new tool in one file, register it, done.
+
+See [CONTRIBUTING.md](CONTRIBUTING.md) for guidelines.
 
 ---
 
