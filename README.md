@@ -26,31 +26,42 @@
 - **Remember** — persistent memory across sessions, learns and adapts
 - **Use tools autonomously** — picks the right tool, handles errors, retries, detects loops
 
-All of this running locally on a **4B parameter model**. On a laptop. In a Docker container.
+All of this running locally on a **4B parameter model**. On a laptop.
 
 ---
 
-## Get started in 30 seconds
+## Get started
+
+### Mac (recommended — uses Metal GPU acceleration)
+
+1. Install Ollama natively:
+```bash
+brew install ollama
+ollama pull huihui_ai/qwen3.5-abliterated:4b
+```
+
+2. Start the agent:
+```bash
+git clone https://github.com/axelmitschidev/nano-ai.git
+cd nano-ai
+docker compose --profile mac up -d --build
+```
+
+### Linux / CI (Ollama runs in Docker)
 
 ```bash
 git clone https://github.com/axelmitschidev/nano-ai.git
 cd nano-ai
-docker compose up -d
+docker compose --profile linux up -d --build
 ```
 
-That's it. Ollama starts, pulls the model, and the agent API is live at `http://localhost:8000`.
+The agent API is live at `http://localhost:8000`.
 
 ```bash
-# Chat with the agent
 curl -X POST http://localhost:8000/chat \
   -H "Content-Type: application/json" \
   -d '{"message": "search the web for the latest AI news and save a summary"}'
-
-# Response
-{"response": "I found and saved a summary of...", "session_id": "abc-123"}
 ```
-
-The agent will search the web, read articles, write a summary, and save it to its workspace. Autonomously.
 
 ---
 
@@ -60,7 +71,7 @@ The agent will search the web, read articles, write a summary, and save it to it
 User message
     |
     v
-[Agent Loop]
+[Agent Orchestrator]  (async)
     |
     ├──> picks a tool
     |        |
@@ -87,6 +98,7 @@ The agent loops until the task is done. It handles errors, retries failed operat
 - **Context management** — sliding window prevents memory overflow
 - **Loop detection** — breaks out of repeated tool calls
 - **Retry with backoff** — web tools retry up to 3 times on failure
+- **Session cap** — max 100 concurrent sessions with automatic eviction
 
 ---
 
@@ -121,16 +133,18 @@ curl -X POST http://localhost:8000/chat \
 
 ```
 app/
-├── main.py              # CLI entry point
-├── server.py            # HTTP API (FastAPI) with sessions
+├── main.py              # CLI entry point (async)
+├── server.py            # HTTP API controller (FastAPI)
+├── session.py           # Session entity + store (TTL, eviction)
 ├── config.py            # Centralized configuration
 ├── agent/
-│   ├── agent.py         # Core agentic loop + loop detection
+│   ├── orchestrator.py  # Async agentic loop + loop detection
 │   ├── context.py       # Context window management
-│   ├── memory.py        # Persistent memory loader
+│   ├── prompt.py        # System prompt builder
 │   └── display.py       # Terminal UI (ANSI)
 ├── llm/
-│   └── client.py        # Ollama API client
+│   ├── port.py          # LLM interface (Protocol)
+│   └── ollama.py        # Async Ollama client (httpx.AsyncClient)
 ├── tools/
 │   ├── registry.py      # Tool registry + validation (Open/Closed)
 │   ├── workspace.py     # File operations (sandboxed)
@@ -142,7 +156,12 @@ app/
     └── system.md        # System prompt
 ```
 
-**Design:** DDD layers, SOLID principles. Every tool is a self-contained module — add your own by creating a file and calling `registry.register()`.
+### Design principles
+
+- **DDD** — domain logic in `agent/`, infrastructure in `llm/` and `logger/`, clear boundaries
+- **SOLID** — single responsibility per module, open/closed tool registry, dependency inversion via `LLMPort` protocol
+- **Async-first** — fully async LLM client with persistent connection pooling, no thread blocking
+- **Performance** — quantized KV cache, flash attention, dynamic `num_predict`, uvloop
 
 ---
 
@@ -201,8 +220,17 @@ def register_all():
 |----------|---------|-------------|
 | `API_URL` | `http://localhost:11434/api/chat` | Ollama endpoint |
 | `API_MODEL` | `huihui_ai/qwen3.5-abliterated:4b` | Model to use |
-| `API_CTX` | `65536` | Context window size (tokens) |
+| `API_CTX` | `8192` | Context window size (tokens) |
 | `API_TOKEN` | — | Auth token (optional, for remote LLMs) |
+
+### Ollama optimization (set as environment variables)
+
+| Variable | Recommended | Effect |
+|----------|-------------|--------|
+| `OLLAMA_KEEP_ALIVE` | `-1` | Never unload model from memory |
+| `OLLAMA_FLASH_ATTENTION` | `1` | Faster attention, lower memory |
+| `OLLAMA_KV_CACHE_TYPE` | `q8_0` | 50% KV cache memory savings |
+| `OLLAMA_NUM_PARALLEL` | `1` | Single-user optimization |
 
 ---
 
@@ -215,7 +243,7 @@ playwright install chromium
 cp .env.example .env  # edit as needed
 
 # API server
-uvicorn app.server:app --host 0.0.0.0 --port 8000
+uvicorn app.server:app --host 0.0.0.0 --port 8000 --loop uvloop
 
 # CLI mode
 python -m app.main
@@ -236,6 +264,7 @@ python -m app.main
 | **Works offline** | Yes (except web tools) | No | Yes |
 | **Sessions** | Multi-session API | Varies | Usually single |
 | **Extensible** | Add tools in 1 file | No | Framework-dependent |
+| **Async** | Full async pipeline | Varies | Rare |
 
 ---
 

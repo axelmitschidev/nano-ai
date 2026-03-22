@@ -5,4 +5,4 @@ ddgs
 playwright
 playwright-stealth
 fastapi
-uvicorn
+uvicorn[standard]

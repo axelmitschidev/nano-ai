@@ -1,67 +1,49 @@
-"""HTTP API server for the Nano AI agent."""
+"""HTTP API server — thin controller layer.
 
-import uuid
+Single Responsibility: HTTP routing and request/response mapping.
+All domain logic is delegated to the orchestrator, session store, and LLM client.
+"""
+
 import asyncio
 from contextlib import asynccontextmanager
-from datetime import datetime
 
 import httpx
 from fastapi import FastAPI
 from pydantic import BaseModel, Field
 
 from app.config import LLM_MODEL, LLM_CTX, LLM_URL
+from app.llm.ollama import OllamaClient
+from app.session import SessionStore
 from app.tools import register_all
 from app.tools.browser import close_browser
-from app.agent.memory import load_system_prompt
-from app.agent.agent import run_turn
+from app.agent.orchestrator import run_turn
 from app.logger.logger import log_user
 from app.logger import logger as log_module
 
 
-# --- Session management ---
+# --- Application state (initialized in lifespan) ---
 
-class Session:
-    def __init__(self):
-        self.history = [{"role": "system", "content": load_system_prompt()}]
-        self.created_at = datetime.utcnow()
-        self.last_active = datetime.utcnow()
-        self.lock = asyncio.Lock()
-
-_sessions: dict[str, Session] = {}
-TTL_SECONDS = 3600
-
-
-def _evict_expired():
-    now = datetime.utcnow()
-    expired = [sid for sid, s in _sessions.items() if (now - s.last_active).total_seconds() > TTL_SECONDS]
-    for sid in expired:
-        del _sessions[sid]
-
-
-def _get_session(session_id: str | None) -> tuple[str, Session]:
-    _evict_expired()
-    if session_id and session_id in _sessions:
-        session = _sessions[session_id]
-        session.last_active = datetime.utcnow()
-        return session_id, session
-    new_id = session_id or str(uuid.uuid4())
-    session = Session()
-    _sessions[new_id] = session
-    return new_id, session
+llm_client: OllamaClient
+sessions: SessionStore
 
 
 # --- Lifespan ---
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    register_all()
+    global llm_client, sessions
 
-    # Quick Ollama check (docker-compose healthcheck handles the wait)
+    register_all()
+    llm_client = OllamaClient()
+    sessions = SessionStore()
+    await sessions.start_periodic_cleanup()
+
+    # Quick Ollama reachability check
     ollama_base = LLM_URL.replace("/api/chat", "")
-    async with httpx.AsyncClient() as client:
+    async with httpx.AsyncClient() as probe:
         for _ in range(5):
             try:
-                resp = await client.get(ollama_base, timeout=2)
+                resp = await probe.get(ollama_base, timeout=2)
                 if resp.status_code == 200:
                     break
             except (httpx.ConnectError, httpx.TimeoutException):
@@ -70,6 +52,8 @@ async def lifespan(app: FastAPI):
 
     yield
 
+    await sessions.stop_periodic_cleanup()
+    await llm_client.close()
     close_browser()
     log_module.close()
 
@@ -77,7 +61,7 @@ async def lifespan(app: FastAPI):
 app = FastAPI(title="nano-ai", version="1.0.0", lifespan=lifespan)
 
 
-# --- Models ---
+# --- Request / Response models ---
 
 class ChatRequest(BaseModel):
     message: str = Field(..., min_length=1, max_length=10000)
@@ -94,16 +78,11 @@ class ChatResponse(BaseModel):
 @app.post("/chat", response_model=ChatResponse)
 async def chat(req: ChatRequest):
     """Send a message to the agent and get a response."""
-    session_id, session = _get_session(req.session_id)
+    session_id, session = sessions.get_or_create(req.session_id)
 
     async with session.lock:
         log_user(req.message)
-
-        # Run sync agent in threadpool to not block event loop
-        loop = asyncio.get_event_loop()
-        session.history = await loop.run_in_executor(
-            None, run_turn, req.message, session.history
-        )
+        session.history = await run_turn(llm_client, req.message, session.history)
 
     # Extract the last assistant message
     for msg in reversed(session.history):
@@ -116,8 +95,8 @@ async def chat(req: ChatRequest):
 @app.post("/reset")
 async def reset(session_id: str | None = None):
     """Reset a conversation session."""
-    if session_id and session_id in _sessions:
-        del _sessions[session_id]
+    if session_id:
+        sessions.remove(session_id)
     return {"status": "reset", "session_id": session_id}
 
 
@@ -128,8 +107,8 @@ async def health():
     ollama_base = LLM_URL.replace("/api/chat", "")
 
     try:
-        async with httpx.AsyncClient() as client:
-            resp = await client.get(ollama_base, timeout=5)
+        async with httpx.AsyncClient() as probe:
+            resp = await probe.get(ollama_base, timeout=5)
             ollama_status = "healthy" if resp.status_code == 200 else f"HTTP {resp.status_code}"
     except Exception as e:
         ollama_status = f"unhealthy: {e}"
@@ -139,5 +118,5 @@ async def health():
         "model": LLM_MODEL,
         "ctx": LLM_CTX,
         "ollama": ollama_status,
-        "sessions": len(_sessions),
+        "sessions": sessions.count,
     }

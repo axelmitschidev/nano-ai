@@ -1,4 +1,4 @@
-"""Persistent memory — loads workspace/memory.md into the system prompt."""
+"""System prompt builder — loads the base prompt and injects workspace memory."""
 
 import os
 from app.config import WORKSPACE_DIR, PROMPT_PATH
