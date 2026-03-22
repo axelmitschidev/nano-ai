@@ -7,9 +7,9 @@ from app.tools import registry
 
 
 def _safe_path(path: str) -> str:
-    """Resolve path and ensure it stays within the workspace."""
-    full = os.path.normpath(os.path.join(WORKSPACE_DIR, path))
-    if not full.startswith(os.path.normpath(WORKSPACE_DIR)):
+    """Resolve path and ensure it stays within the workspace (realpath for symlink safety)."""
+    full = os.path.realpath(os.path.join(WORKSPACE_DIR, path))
+    if not full.startswith(os.path.realpath(WORKSPACE_DIR)):
         raise PermissionError(f"Access denied: {path} is outside workspace")
     return full
 
@@ -51,6 +51,8 @@ def list_files() -> str:
             dir_path = os.path.join(rel_root, d) if rel_root != "." else d
             files.append(f"[dir] {dir_path}/")
         for name in filenames:
+            if name == ".gitkeep":
+                continue
             file_path = os.path.join(rel_root, name) if rel_root != "." else name
             files.append(file_path)
     if not files:
@@ -70,9 +72,8 @@ def delete_file(path: str) -> str:
 
 
 def register_tools():
-    """Register all workspace tools in the global registry."""
     registry.register("write_file", write_file,
-        "Create or overwrite a file in the workspace. Parent dirs created automatically.",
+        "Create or overwrite a file in the workspace.",
         {"type": "object", "properties": {
             "path": {"type": "string", "description": "Relative file path"},
             "content": {"type": "string", "description": "File content"},

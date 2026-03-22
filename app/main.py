@@ -1,4 +1,4 @@
-"""Entry point for the Nano AI agent."""
+"""CLI entry point for the Nano AI agent."""
 
 import atexit
 from app.config import LLM_MODEL, LLM_CTX
@@ -7,17 +7,14 @@ from app.tools.browser import close_browser
 from app.agent.memory import load_system_prompt
 from app.agent.agent import run_turn
 from app.agent.display import print_banner, print_end
-from app.logger.logger import log_user
+from app.logger.logger import log_user, close as close_logger
 
 
 def main():
-    # Register all tools
     register_all()
-
-    # Cleanup browser on exit
     atexit.register(close_browser)
+    atexit.register(close_logger)
 
-    # Load system prompt + memory
     system_prompt = load_system_prompt()
     history = [{"role": "system", "content": system_prompt}]
 

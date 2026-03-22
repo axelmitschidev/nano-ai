@@ -1,12 +1,10 @@
 """Agent orchestration — the core agentic loop.
 
-Single Responsibility: only handles the message loop and tool dispatch.
-Depends on abstractions (registry, client, display) not implementations.
+Single Responsibility: handles message loop, tool dispatch, and loop detection.
 """
 
-import re
 import json
-from app.config import LLM_CTX, MAX_TOOL_ROUNDS, MAX_SILENT_RETRIES
+from app.config import LLM_CTX, MAX_TOOL_ROUNDS, MAX_SILENT_RETRIES, MAX_LOOP_DETECT
 from app.llm import client as llm
 from app.tools import registry
 from app.agent import display, context
@@ -14,17 +12,38 @@ from app.logger.logger import log_thinking, log_tool, log_response, log_error
 
 
 def _try_parse_text_tool_call(text: str) -> dict | None:
-    """Detect tool calls printed as text (Qwen 3.5 bug workaround)."""
-    match = re.search(r'\{\s*"name"\s*:\s*"(\w+)"\s*,\s*"arguments"\s*:\s*(\{[^}]*\})\s*\}', text)
-    if match:
-        try:
-            name = match.group(1)
-            args = json.loads(match.group(2))
-            if registry.get_fn(name):
-                return {"function": {"name": name, "arguments": args}}
-        except (json.JSONDecodeError, KeyError):
-            pass
+    """Detect tool calls printed as text (Qwen 3.5 bug workaround).
+    Uses json.JSONDecoder for proper nested JSON parsing."""
+    import re
+    # Look for "name" key followed by "arguments" key
+    match = re.search(r'"name"\s*:\s*"(\w+)".*?"arguments"\s*:\s*', text, re.DOTALL)
+    if not match:
+        return None
+
+    name = match.group(1)
+    if not registry.get_fn(name):
+        return None
+
+    # Find the start of the arguments object
+    args_start = text.find("{", match.end() - 1)
+    if args_start == -1:
+        return None
+
+    try:
+        decoder = json.JSONDecoder()
+        args, _ = decoder.raw_decode(text[args_start:])
+        if isinstance(args, dict):
+            return {"function": {"name": name, "arguments": args}}
+    except (json.JSONDecodeError, ValueError):
+        pass
     return None
+
+
+def _detect_loop(tool_calls_history: list, tool_call: dict) -> bool:
+    """Detect if the same tool+args has been called N times in a row."""
+    key = json.dumps(tool_call.get("function", {}), sort_keys=True)
+    recent = tool_calls_history[-MAX_LOOP_DETECT:]
+    return recent.count(key) >= MAX_LOOP_DETECT
 
 
 def _collect_stream(chunks) -> tuple[dict, list]:
@@ -117,15 +136,17 @@ def _execute_tool(tool_call: dict) -> str:
 
 
 def run_turn(user_input: str, history: list) -> list:
-    """Run a single user turn: prompt → (tool loop) → response. Returns updated history."""
+    """Run a single user turn: prompt -> (tool loop) -> response. Returns updated history."""
     messages = [*history, {"role": "user", "content": user_input}]
     tools = registry.get_definitions()
     silent_count = 0
+    tool_calls_history = []
 
     for _ in range(MAX_TOOL_ROUNDS):
         messages = context.trim(messages)
 
-        chunks = llm.chat(messages, stream=True, think="low", tools=tools)
+        # Disable thinking for tool-calling turns (saves tokens, avoids bugs)
+        chunks = llm.chat(messages, stream=True, think=False, tools=tools)
         assistant_msg, tool_calls = _collect_stream(chunks)
         messages.append(assistant_msg)
 
@@ -141,11 +162,21 @@ def run_turn(user_input: str, history: list) -> list:
                 break
 
             display.print_retry(silent_count, MAX_SILENT_RETRIES)
-            messages.append({"role": "user", "content": "You must respond now. Either call a tool or give your answer."})
+            messages.append({"role": "user", "content": "You must respond now. Either call a tool or answer."})
             continue
 
         silent_count = 0
         for tc in tool_calls:
+            tc_key = json.dumps(tc.get("function", {}), sort_keys=True)
+
+            if _detect_loop(tool_calls_history, tc):
+                loop_msg = f"Loop detected: '{tc['function']['name']}' called {MAX_LOOP_DETECT} times with same args. Answer with what you have."
+                display.print_tool_error(loop_msg)
+                messages.append({"role": "user", "content": loop_msg})
+                log_error(loop_msg, context="loop_detection")
+                break
+
+            tool_calls_history.append(tc_key)
             result = _execute_tool(tc)
             messages.append({"role": "tool", "content": str(result)})
     else:

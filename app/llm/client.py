@@ -28,9 +28,13 @@ def _build_payload(
         "think": think,
         "options": {
             "num_ctx": LLM_CTX,
-            "temperature": 0.1,
+            "temperature": 0.15,
+            "top_p": 0.7,
+            "top_k": 15,
+            "num_predict": 1024,
             "repeat_penalty": 1.05,
             "repeat_last_n": 256,
+            "stop": ["<|im_end|>"],
         },
     }
     if tools:
@@ -41,7 +45,7 @@ def _build_payload(
 def chat(
     messages: list,
     stream: bool = True,
-    think: bool | str = "low",
+    think: bool | str = False,
     tools: list | None = None,
 ) -> Generator[dict, None, None]:
     """Send messages to the LLM and yield streamed chunks."""
@@ -50,13 +54,26 @@ def chat(
 
         if not stream:
             res = httpx.post(url=LLM_URL, headers=_headers(), timeout=TIMEOUT, json=payload)
-            yield res.json()
+            try:
+                data = res.json()
+            except (json.JSONDecodeError, ValueError):
+                yield {"error": f"Invalid response from LLM (HTTP {res.status_code})"}
+                return
+            if "error" in data:
+                yield {"error": data["error"]}
+                return
+            yield data
             return
 
         with httpx.stream("POST", url=LLM_URL, headers=_headers(), timeout=TIMEOUT, json=payload) as res:
             for line in res.iter_lines():
                 if line:
-                    yield json.loads(line)
+                    try:
+                        yield json.loads(line)
+                    except json.JSONDecodeError:
+                        continue
 
     except httpx.HTTPError as e:
-        yield {"error": str(e)}
+        yield {"error": f"HTTP error: {e}"}
+    except Exception as e:
+        yield {"error": f"LLM client error: {e}"}
