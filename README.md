@@ -70,7 +70,7 @@ app/
 |----------|---------|-------------|
 | `API_URL` | `http://localhost:11434/api/chat` | Ollama endpoint |
 | `API_MODEL` | `huihui_ai/qwen3.5-abliterated:4b` | Model to use |
-| `API_CTX` | `4096` | Context window size |
+| `API_CTX` | `65536` | Context window size |
 | `API_TOKEN` | — | Auth token (optional) |
 
 ## Tools
