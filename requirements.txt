@@ -6,3 +6,4 @@ playwright
 playwright-stealth
 fastapi
 uvicorn[standard]
+rich

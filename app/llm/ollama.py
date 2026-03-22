@@ -49,7 +49,7 @@ class OllamaClient:
             "messages": messages,
             "stream": stream,
             "think": think,
-            "keep_alive": "-1",
+            "keep_alive": "0",
             "options": {
                 "num_ctx": LLM_CTX,
                 "temperature": 0.15,

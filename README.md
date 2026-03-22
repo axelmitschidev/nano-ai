@@ -141,7 +141,7 @@ app/
 │   ├── orchestrator.py  # Async agentic loop + loop detection
 │   ├── context.py       # Context window management
 │   ├── prompt.py        # System prompt builder
-│   └── display.py       # Terminal UI (ANSI)
+│   └── display.py       # Terminal UI (Rich)
 ├── llm/
 │   ├── port.py          # LLM interface (Protocol)
 │   └── ollama.py        # Async Ollama client (httpx.AsyncClient)

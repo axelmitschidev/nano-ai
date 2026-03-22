@@ -1,72 +1,102 @@
-"""Terminal display — handles all ANSI formatting and output."""
+"""Terminal display — Rich-based formatting and output."""
 
 import json
+from rich.console import Console
+from rich.markdown import Markdown
+from rich.panel import Panel
+from rich.text import Text
 
-DIM = "\033[2m"
-ITALIC = "\033[3m"
-RESET = "\033[0m"
-CYAN = "\033[36m"
-BOLD = "\033[1m"
-YELLOW = "\033[33m"
-RED = "\033[31m"
+console = Console()
+
+# Buffer for streaming response — rendered as Markdown at flush time
+_response_buf: list[str] = []
 
 
 def print_banner(model: str, ctx: int):
-    print(f"{DIM}Nano agent ready. ctx={ctx} | model={model}{RESET}\n")
+    console.print(
+        Panel(
+            f"[dim]ctx={ctx} | model={model}[/dim]",
+            title="[bold]Nano Agent[/bold]",
+            border_style="dim",
+            expand=False,
+        )
+    )
+    console.print()
 
 
 def print_thinking_start():
-    print(f"{DIM}{ITALIC}{CYAN}thinking...{RESET}")
-    print(f"{DIM}{ITALIC}{CYAN}", end="")
+    console.print("[dim italic cyan]thinking...[/dim italic cyan]")
 
 
 def print_thinking(text: str):
-    print(text, end="", flush=True)
+    console.file.write(f"\033[2m\033[3m\033[36m{text}\033[0m")
+    console.file.flush()
 
 
 def print_response_start():
-    print(f"{RESET}\n{BOLD}", end="")
+    console.file.write("\033[0m\n")
+    console.file.flush()
+    _response_buf.clear()
 
 
 def print_response(text: str):
-    print(text, end="", flush=True)
+    _response_buf.append(text)
+    console.file.write(text)
+    console.file.flush()
+
+
+def _flush_response():
+    """Render accumulated response as Markdown."""
+    full = "".join(_response_buf)
+    _response_buf.clear()
+    if not full.strip():
+        return
+    # Move cursor up to overwrite raw streamed text: clear lines then print Markdown
+    line_count = full.count("\n") + 1
+    for _ in range(line_count):
+        console.file.write("\033[A\033[2K")
+    console.file.flush()
+    console.print(Markdown(full))
 
 
 def print_stats(tps: float, tok: int, ctx_pct: int):
+    _flush_response()
     parts = [f"{tps} t/s", f"{tok} tok", f"ctx {ctx_pct}%"]
-    print(f"{RESET}\n")
-    print(f"{DIM}{' | '.join(parts)}{RESET}")
-    print()
+    console.print(f"\n[dim]{' | '.join(parts)}[/dim]\n")
 
 
 def print_tool_call(name: str, args: dict):
-    print(f"{DIM}{YELLOW}> {name}({json.dumps(args, ensure_ascii=False)}){RESET}")
+    text = Text()
+    text.append("> ", style="bold yellow")
+    text.append(name, style="yellow")
+    text.append(f"({json.dumps(args, ensure_ascii=False)})", style="dim yellow")
+    console.print(text)
 
 
 def print_tool_result(result: str):
     preview = result[:200] + ("..." if len(result) > 200 else "")
-    print(f"{DIM}  = {preview}{RESET}")
+    console.print(f"  [dim]= {preview}[/dim]")
 
 
 def print_tool_error(error: str):
-    print(f"{RED}  {error}{RESET}")
+    console.print(f"  [bold red]{error}[/bold red]")
 
 
 def print_retry(count: int, max_retries: int):
-    print(f"{DIM}{YELLOW}(retry {count}/{max_retries}...){RESET}")
+    console.print(f"[dim yellow](retry {count}/{max_retries}...)[/dim yellow]")
 
 
 def print_silent_fail(max_retries: int):
-    print(f"{DIM}{RED}(model silent after {max_retries} retries){RESET}")
+    console.print(f"[dim red](model silent after {max_retries} retries)[/dim red]")
 
 
 def print_round_limit(limit: int):
-    print(f"{RED}Tool rounds limit ({limit}) reached.{RESET}")
+    console.print(f"[red]Tool rounds limit ({limit}) reached.[/red]")
 
 
 def print_parsed_tool():
-    print(f"\n{DIM}{YELLOW}(parsed tool call from text){RESET}")
+    console.print("\n[dim yellow](parsed tool call from text)[/dim yellow]")
 
 
 def print_end():
-    print(f"\n{DIM}Session ended.{RESET}")
+    console.print("\n[dim]Session ended.[/dim]")
