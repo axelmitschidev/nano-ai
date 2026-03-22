@@ -29,7 +29,7 @@ services:
     environment:
       - API_URL=http://ollama:11434/api/chat
       - API_MODEL=huihui_ai/qwen3.5-abliterated:4b
-      - API_CTX=8192
+      - API_CTX=4096
     volumes:
       - ./app/workspace:/app/app/workspace
       - ./app/logs:/app/app/logs
