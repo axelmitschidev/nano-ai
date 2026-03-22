@@ -241,12 +241,20 @@ def register_all():
 pip install -r requirements.txt
 playwright install chromium
 cp .env.example .env  # edit as needed
+```
 
-# API server
-uvicorn app.server:app --host 0.0.0.0 --port 8000 --loop uvloop
+### CLI (TUI mode)
 
-# CLI mode
+Interactive terminal interface with Rich rendering (Markdown, colored tool calls, panels):
+
+```bash
 python -m app.main
+```
+
+### API server
+
+```bash
+uvicorn app.server:app --host 0.0.0.0 --port 8000 --loop uvloop
 ```
 
 ---
