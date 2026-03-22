@@ -1,11 +1,12 @@
-"""Agent orchestration — the core agentic loop.
+"""Agent orchestrator — the core agentic loop.
 
-Single Responsibility: handles message loop, tool dispatch, and loop detection.
+Single Responsibility: runs the message loop, dispatches tools, detects loops.
+Dependency Inversion: depends on LLMPort protocol, not a concrete client.
 """
 
 import json
 from app.config import LLM_CTX, MAX_TOOL_ROUNDS, MAX_SILENT_RETRIES, MAX_LOOP_DETECT
-from app.llm import client as llm
+from app.llm.port import LLMPort
 from app.tools import registry
 from app.agent import display, context
 from app.logger.logger import log_thinking, log_tool, log_response, log_error
@@ -15,7 +16,7 @@ def _try_parse_text_tool_call(text: str) -> dict | None:
     """Detect tool calls printed as text (Qwen 3.5 bug workaround).
     Uses json.JSONDecoder for proper nested JSON parsing."""
     import re
-    # Look for "name" key followed by "arguments" key
+
     match = re.search(r'"name"\s*:\s*"(\w+)".*?"arguments"\s*:\s*', text, re.DOTALL)
     if not match:
         return None
@@ -24,7 +25,6 @@ def _try_parse_text_tool_call(text: str) -> dict | None:
     if not registry.get_fn(name):
         return None
 
-    # Find the start of the arguments object
     args_start = text.find("{", match.end() - 1)
     if args_start == -1:
         return None
@@ -39,22 +39,22 @@ def _try_parse_text_tool_call(text: str) -> dict | None:
     return None
 
 
-def _detect_loop(tool_calls_history: list, tool_call: dict) -> bool:
+def _detect_loop(tool_calls_history: list[str], tool_call: dict) -> bool:
     """Detect if the same tool+args has been called N times in a row."""
     key = json.dumps(tool_call.get("function", {}), sort_keys=True)
     recent = tool_calls_history[-MAX_LOOP_DETECT:]
     return recent.count(key) >= MAX_LOOP_DETECT
 
 
-def _collect_stream(chunks) -> tuple[dict, list]:
-    """Consume the LLM stream, display in real-time, return (message, tool_calls)."""
+async def _collect_stream(chunks) -> tuple[dict, list[dict]]:
+    """Consume the async LLM stream, display in real-time, return (message, tool_calls)."""
     thinking_started = False
     responding_started = False
     full_content = ""
     full_thinking = ""
     tool_calls = []
 
-    for chunk in chunks:
+    async for chunk in chunks:
         if chunk.get("error"):
             display.print_tool_error(chunk["error"])
             log_error(chunk["error"], context="llm")
@@ -113,7 +113,7 @@ def _collect_stream(chunks) -> tuple[dict, list]:
 
 
 def _execute_tool(tool_call: dict) -> str:
-    """Validate, execute, display, and log a tool call."""
+    """Validate, execute, display, and log a single tool call."""
     is_valid, error = registry.validate(tool_call)
     if not is_valid:
         display.print_tool_error(error)
@@ -135,19 +135,18 @@ def _execute_tool(tool_call: dict) -> str:
     return result
 
 
-def run_turn(user_input: str, history: list) -> list:
-    """Run a single user turn: prompt -> (tool loop) -> response. Returns updated history."""
+async def run_turn(llm: LLMPort, user_input: str, history: list[dict]) -> list[dict]:
+    """Run a single user turn: prompt → (tool loop) → response. Returns updated history."""
     messages = [*history, {"role": "user", "content": user_input}]
     tools = registry.get_definitions()
     silent_count = 0
-    tool_calls_history = []
+    tool_calls_history: list[str] = []
 
     for _ in range(MAX_TOOL_ROUNDS):
         messages = context.trim(messages)
 
-        # Disable thinking for tool-calling turns (saves tokens, avoids bugs)
         chunks = llm.chat(messages, stream=True, think=False, tools=tools)
-        assistant_msg, tool_calls = _collect_stream(chunks)
+        assistant_msg, tool_calls = await _collect_stream(chunks)
         messages.append(assistant_msg)
 
         if not tool_calls:
