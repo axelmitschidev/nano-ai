@@ -56,15 +56,15 @@ def _get_session(session_id: str | None) -> tuple[str, Session]:
 async def lifespan(app: FastAPI):
     register_all()
 
-    # Wait for Ollama
+    # Quick Ollama check (docker-compose healthcheck handles the wait)
     ollama_base = LLM_URL.replace("/api/chat", "")
     async with httpx.AsyncClient() as client:
-        for _ in range(30):
+        for _ in range(5):
             try:
-                resp = await client.get(ollama_base)
+                resp = await client.get(ollama_base, timeout=2)
                 if resp.status_code == 200:
                     break
-            except httpx.ConnectError:
+            except (httpx.ConnectError, httpx.TimeoutException):
                 pass
             await asyncio.sleep(1)
 
