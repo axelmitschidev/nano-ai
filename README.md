@@ -5,6 +5,7 @@ Autonomous AI agent running locally on Ollama. Lightweight, private, extensible.
 ## Features
 
 - **Local LLM** — runs on Ollama, no cloud dependency
+- **HTTP API** — FastAPI server with `/chat` endpoint
 - **Stealth browser** — Playwright with anti-detection for web interaction
 - **Workspace** — sandboxed file system for persistent storage
 - **Code execution** — write and run Python, Bash, JavaScript
@@ -12,39 +13,55 @@ Autonomous AI agent running locally on Ollama. Lightweight, private, extensible.
 - **Persistent memory** — remembers across sessions via workspace
 - **Audit logs** — every action logged in JSONL
 
+## Quick start
+
+### Docker (one command)
+
+```bash
+docker compose up -d
+```
+
+That's it. Ollama starts, pulls `qwen3.5:4b` automatically, then the agent API is available at `http://localhost:8000`.
+
+### API usage
+
+```bash
+# Chat
+curl -X POST http://localhost:8000/chat \
+  -H "Content-Type: application/json" \
+  -d '{"message": "hello"}'
+
+# Reset conversation
+curl -X POST http://localhost:8000/reset
+
+# Health check
+curl http://localhost:8000/health
+```
+
+### Local (without Docker)
+
+```bash
+pip install -r requirements.txt
+playwright install chromium
+cp .env.example .env
+# API server
+uvicorn app.server:app --host 0.0.0.0 --port 8000
+# Or CLI mode
+python -m app.main
+```
+
 ## Architecture
 
 ```
 app/
-├── main.py              # Entry point
+├── main.py              # CLI entry point
+├── server.py            # HTTP API server
 ├── config.py            # Environment configuration
 ├── agent/               # Orchestration, context, display
 ├── llm/                 # Ollama API client
 ├── tools/               # Registry + workspace, browser, system tools
 ├── logger/              # Session audit logging
 └── prompts/             # System prompt
-```
-
-## Quick start
-
-### Local
-
-```bash
-# Prerequisites: Python 3.13+, Ollama running locally
-pip install -r requirements.txt
-playwright install chromium
-cp .env.example .env  # edit model/ctx as needed
-python -m app.main
-```
-
-### Docker
-
-```bash
-docker compose up -d
-# Pull a model inside the Ollama container
-docker exec nano-ollama ollama pull qwen3.5:4b
-# Attach to the agent
-docker attach nano-agent
 ```
 
 ## Configuration
