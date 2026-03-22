@@ -28,8 +28,11 @@ jobs:
       - run: pip install -r requirements.txt
       - run: playwright install --with-deps chromium
       - run: python -c "from app.tools import register_all; register_all(); print('tools OK')"
-      - run: python -c "from app.agent.memory import load_system_prompt; print(load_system_prompt()[:50])"
+      - run: python -c "from app.agent.prompt import load_system_prompt; print(load_system_prompt()[:50])"
       - run: python -c "from app.agent.context import trim; print('context OK')"
+      - run: python -c "from app.llm.ollama import OllamaClient; print('ollama OK')"
+      - run: python -c "from app.session import SessionStore; print('session OK')"
+      - run: python -c "from app.server import app; print('server OK')"
 
   docker:
     runs-on: ubuntu-latest
