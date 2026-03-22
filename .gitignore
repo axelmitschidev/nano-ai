@@ -1,0 +1,10 @@
+.env
+.venv/
+__pycache__/
+*.pyc
+app/workspace/*
+!app/workspace/.gitkeep
+app/logs/*
+!app/logs/.gitkeep
+.DS_Store
+.claude/

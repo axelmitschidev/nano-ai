@@ -1,0 +1,28 @@
+services:
+  ollama:
+    image: ollama/ollama:latest
+    container_name: nano-ollama
+    ports:
+      - "11434:11434"
+    volumes:
+      - ollama_data:/root/.ollama
+    restart: unless-stopped
+
+  agent:
+    build: .
+    container_name: nano-agent
+    stdin_open: true
+    tty: true
+    depends_on:
+      - ollama
+    environment:
+      - API_URL=http://ollama:11434/api/chat
+      - API_TOKEN=
+      - API_MODEL=qwen3.5:4b
+      - API_CTX=32768
+    volumes:
+      - ./app/workspace:/app/app/workspace
+      - ./app/logs:/app/app/logs
+
+volumes:
+  ollama_data:

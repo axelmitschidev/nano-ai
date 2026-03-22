@@ -1,0 +1,6 @@
+httpx
+python-dotenv
+html2text
+ddgs
+playwright
+playwright-stealth
