@@ -2,47 +2,47 @@
   <img src="assets/banner.png" alt="nano-ai" width="600">
 </p>
 
-<h3 align="center">An autonomous AI agent that runs on your laptop.<br>2B parameters. Grade A.</h3>
+<h3 align="center">An autonomous AI agent that runs on your laptop.<br>4B parameters. 10/11 autonomous tasks passed.</h3>
 
 <p align="center">
   <a href="https://github.com/axelmitschidev/nano-ai/stargazers"><img src="https://img.shields.io/github/stars/axelmitschidev/nano-ai?style=social" alt="Stars"></a>
   <a href="https://github.com/axelmitschidev/nano-ai/blob/main/LICENSE"><img src="https://img.shields.io/badge/license-MIT-blue.svg" alt="License"></a>
   <img src="https://img.shields.io/badge/python-3.13+-blue.svg" alt="Python">
-  <img src="https://img.shields.io/badge/model-2B%20params-green.svg" alt="Model">
-  <img src="https://img.shields.io/badge/E2E%20score-80%25%20Grade%20A-brightgreen.svg" alt="Benchmark">
+  <img src="https://img.shields.io/badge/model-4B%20params-green.svg" alt="Model">
+  <img src="https://img.shields.io/badge/E2E-10%2F11%20tasks%20passed-brightgreen.svg" alt="Benchmark">
   <img src="https://img.shields.io/badge/runs%20on-your%20machine-black.svg" alt="Local">
 </p>
 
 ---
 
-> A fully autonomous AI agent — browses the web, writes and runs code, manages files — powered by a **2B parameter model** running 100% locally. No cloud. No API key. No telemetry. **One command to install.**
+> A fully autonomous AI agent — browses the web, writes and runs code, manages files — powered by a **4B parameter model** running 100% locally. No cloud. No API key. No telemetry. **One command to install.**
 
 ---
 
 ## Benchmark — what a 2B model can actually do
 
-We built an [end-to-end benchmark](e2e_bench.py) that tests the agent on real autonomous tasks, from simple chat to multi-step web research. Here are the results on a MacBook with **Qwen 3.5 2B**:
+We built an [end-to-end benchmark](e2e_bench.py) that tests the agent on real autonomous tasks, from simple chat to multi-step web research. Here are the results on a MacBook with **Qwen 3.5 4B**:
 
 | Level | Task | Tools used | Time | Result |
 |-------|------|-----------|------|--------|
-| L1 | Answer a factual question | — | 11s | **PASS** |
-| L1 | Use `get_date` tool | `get_date` | 10s | **PASS** |
-| L2 | Write a file to workspace | `write_file` | 11s | **PASS** |
-| L2 | Read back the file | `list_files → read_file` | 14s | **PASS** |
-| L2 | List workspace contents | `list_files` | 8s | **PASS** |
-| L3 | Write Python + execute it | `write_file → run_file` | 24s | **PASS** |
-| L3 | Debug a buggy script | `list → read → write → run` | 47s | FAIL |
-| L4 | Search the web | `web_search` | 31s | **PASS** |
-| L4 | Read a web page + summarize | `web_read` | 32s | **PASS** |
-| L5 | Compute primes + save results | `write → run → write` | 44s | **PASS** |
-| L5 | Research + synthesize + save | `search → read → write` | 45s | **PASS** |
+| L1 | Answer a factual question | — | 21s | **PASS** |
+| L1 | Use `get_date` tool | `get_date` | 27s | **PASS** |
+| L2 | Write a file to workspace | `write_file` | 30s | **PASS** |
+| L2 | Read back the file | `read_file` | 26s | **PASS** |
+| L2 | List workspace contents | `list_files` | 84s | **PASS** |
+| L3 | Write Python + execute it | `write_file → run_file` | 60s | **PASS** |
+| L3 | Debug a buggy script | `read → write → run` | 73s | **PASS** |
+| L4 | Search the web | `web_search` | 109s | **PASS** |
+| L4 | Read a web page + summarize | `web_read` | 155s | **PASS** |
+| L5 | Compute primes + save results | `write → run → write` | 131s | FAIL |
+| L5 | Research + synthesize + save | `search → read → write` | 222s | **PASS** |
 
 ```
-  10/11 tasks passed — 21 tok/s — peak context 38%
+  10/11 tasks passed — 7.7 tok/s — peak context 47%
 
-  ╔═══════════════════════════╗
-  ║   GRADE:  A   (80/100)   ║
-  ╚═══════════════════════════╝
+  ╔══════════════════════════════════╗
+  ║   10/11 autonomous tasks passed  ║
+  ╚══════════════════════════════════╝
 ```
 
 Run it yourself: `.venv/bin/python e2e_bench.py`
@@ -127,7 +127,7 @@ User → "find Python news and save a summary"
    "Done. Saved summary to summary.txt."
 ```
 
-The orchestrator loops through **observe → think → act → observe** until the task is complete. It handles errors, retries, detects loops, and manages its own context window — all with a 2B model.
+The orchestrator loops through **observe → think → act → observe** until the task is complete. It handles errors, retries, detects loops, and manages its own context window — all with a 4B model on a laptop.
 
 ---
 
@@ -229,7 +229,7 @@ Then add one line to `app/tools/__init__.py`. Done.
 | **Privacy** | 100% local | Your data on their servers | API calls logged |
 | **Web browsing** | Stealth browser | Limited | Usually none |
 | **Code execution** | Sandboxed | Restricted | Complex setup |
-| **Model size** | 2-4B (~1.5GB) | 200B+ | 7-70B+ |
+| **Model size** | 4B (~3GB) | 200B+ | 7-70B+ |
 | **Setup time** | 2 minutes | Account + payment | Hours of config |
 | **Extensible** | 1 file = 1 tool | No | Framework-dependent |
 | **Works offline** | Yes (except web) | No | No |
