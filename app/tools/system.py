@@ -70,6 +70,51 @@ def run_file(path: str) -> str:
         return f"ERROR: {e}"
 
 
+_ALLOWED_COMMANDS = frozenset({
+    "python3", "node", "pip", "cat", "ls", "head", "tail", "wc",
+    "sort", "grep", "find", "curl", "jq", "echo", "date", "mkdir", "cp", "mv",
+})
+
+_DANGEROUS_PATTERNS = frozenset({"|", ";", "&&", "||", "`", "$(", "${", ">", "<", ">>", "<<"})
+
+
+def run_command(command: str) -> str:
+    parts = command.strip().split()
+    if not parts:
+        return "ERROR: empty command."
+
+    cmd_name = os.path.basename(parts[0])
+    if cmd_name not in _ALLOWED_COMMANDS:
+        return f"ERROR: '{cmd_name}' is not allowed. Allowed: {', '.join(sorted(_ALLOWED_COMMANDS))}"
+
+    for pattern in _DANGEROUS_PATTERNS:
+        if pattern in command:
+            return f"ERROR: '{pattern}' is not allowed in commands for security."
+
+    try:
+        result = subprocess.run(
+            parts,
+            capture_output=True,
+            text=True,
+            timeout=30,
+            cwd=WORKSPACE_DIR,
+            env=_SAFE_ENV,
+            start_new_session=True,
+        )
+        stdout = result.stdout[:3000] if result.stdout else ""
+        stderr = result.stderr[:800] if result.stderr else ""
+        output = stdout
+        if stderr:
+            output += f"\n[stderr] {stderr}"
+        if result.returncode != 0:
+            output += f"\n[exit code: {result.returncode}]"
+        return output if output.strip() else "(no output)"
+    except subprocess.TimeoutExpired:
+        return "ERROR: timeout (30s max)"
+    except Exception as e:
+        return f"ERROR: {e}"
+
+
 def register_tools():
     registry.register("get_date", get_date,
         "Get the current date and time.",
@@ -80,3 +125,9 @@ def register_tools():
         {"type": "object", "properties": {
             "path": {"type": "string", "description": "Relative path of script to run"},
         }, "required": ["path"]})
+
+    registry.register("run_command", run_command,
+        "Run a shell command in the workspace. Allowed: python3, node, pip, cat, ls, head, tail, wc, sort, grep, find, curl, jq, echo, date, mkdir, cp, mv.",
+        {"type": "object", "properties": {
+            "command": {"type": "string", "description": "The command to run (e.g. 'pip install requests', 'curl https://...')"},
+        }, "required": ["command"]})

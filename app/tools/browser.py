@@ -1,6 +1,7 @@
 """Browser tools — web search, reading, and interactive navigation."""
 
 import asyncio
+import re
 import httpx
 from playwright.async_api import async_playwright
 from playwright_stealth import Stealth
@@ -164,7 +165,12 @@ async def web_read(url: str) -> str:
             client = _get_http_client()
             res = await client.get(url)
             if res.status_code == 200 and len(res.text) > 500:
-                md = _to_markdown(res.text)
+                html = res.text
+                # Extract <main> or <article> content for cleaner output
+                m = re.search(r"(<(?:main|article)\b[^>]*>.*?</(?:main|article)>)", html, re.DOTALL | re.IGNORECASE)
+                if m:
+                    html = m.group(1)
+                md = _to_markdown(html)
                 if len(md) > 200:
                     return md[:4000] + "\n\n[... truncated ...]" if len(md) > 4000 else md
         except Exception:

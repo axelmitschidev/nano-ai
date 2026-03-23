@@ -274,6 +274,55 @@ async def test_autonomous_research():
     return r
 
 
+# ── Level 6: Advanced ─────────────────────────────────────────────────
+
+@test(6, "Plan multi-step task", "Agent plans before executing a complex task", weight=15)
+async def test_planning():
+    r = await send_message(
+        "Search the web for 'Python asyncio tutorial', read the best result, "
+        "write a summary to asyncio_notes.txt, then write a small asyncio example script "
+        "called async_demo.py and run it."
+    )
+    notes = WORKSPACE / "asyncio_notes.txt"
+    demo = WORKSPACE / "async_demo.py"
+    r.completed = (
+        "web_search" in r.tools_used
+        and "write_file" in r.tools_used
+        and notes.exists()
+        and len(notes.read_text()) > 50
+    )
+    return r
+
+
+@test(6, "Persistent memory", "Agent remembers across the conversation", weight=15)
+async def test_memory():
+    r1 = await send_message("Remember that my favorite language is Python. Use the remember tool.")
+    r2 = await send_message("What is my favorite programming language? Use the recall tool to check your memory.")
+    r2.completed = (
+        "remember" in r1.tools_used
+        and "recall" in r2.tools_used
+        and "python" in r2.response.lower()
+    )
+    # Merge metrics
+    r2.tool_rounds += r1.tool_rounds
+    r2.tools_used = r1.tools_used + r2.tools_used
+    r2.latency_s += r1.latency_s
+    return r2
+
+
+@test(6, "Shell command", "Agent uses run_command for system tasks", weight=10)
+async def test_run_command():
+    r = await send_message(
+        "Use run_command to list all Python files in the workspace, "
+        "then count the total lines across all .py files using wc."
+    )
+    r.completed = (
+        "run_command" in r.tools_used
+        and len(r.response) > 10
+    )
+    return r
+
+
 # ── Scoring ──────────────────────────────────────────────────────────
 
 def score_result(r: TestResult, weight: int) -> float:
@@ -371,7 +420,7 @@ def print_report(report: BenchReport):
         levels[r.level]["score"] += r.score
         levels[r.level]["max"] += t["weight"]
 
-    level_names = {1: "Basic", 2: "File Ops", 3: "Code Exec", 4: "Web", 5: "Complex"}
+    level_names = {1: "Basic", 2: "File Ops", 3: "Code Exec", 4: "Web", 5: "Complex", 6: "Advanced"}
     print(f"  {'Level':<20} {'Pass':>6} {'Score':>10} {'Pct':>8}")
     print(f"  {'─' * 20} {'─' * 6} {'─' * 10} {'─' * 8}")
     for lv in sorted(levels):
@@ -440,6 +489,10 @@ async def run_benchmark():
     for f in WORKSPACE.glob("primes*"):
         f.unlink()
     for f in WORKSPACE.glob("fastapi_summary*"):
+        f.unlink()
+    for f in WORKSPACE.glob("asyncio*"):
+        f.unlink()
+    for f in WORKSPACE.glob("async_demo*"):
         f.unlink()
 
     report = BenchReport()

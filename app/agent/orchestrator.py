@@ -7,39 +7,64 @@ Dependency Inversion: depends on LLMPort protocol, not a concrete client.
 import asyncio
 import json
 import re
-from app.config import LLM_CTX, LLM_THINK, MAX_TOOL_ROUNDS, MAX_SILENT_RETRIES, MAX_LOOP_DETECT
+from app.config import LLM_CTX, LLM_MODEL, LLM_THINK, MAX_TOOL_ROUNDS, MAX_SILENT_RETRIES, MAX_LOOP_DETECT, AGENT_PLAN
 from app.llm.port import LLMPort
+from app.llm.profiles import detect_profile
 from app.tools import registry
 from app.agent import display, context
 from app.logger.logger import log_thinking, log_tool, log_response, log_error
 
+_model_profile = detect_profile(LLM_MODEL)
 
 EventSink = asyncio.Queue | None
 
-# Tags for synthetic messages that should be cleaned from history
 _SYNTHETIC_TAG = "__synthetic__"
+
+# Error-guided retry hints
+_ERROR_HINTS: dict[str, str] = {
+    "timeout": "Try a simpler approach or reduce the scope.",
+    "not found": "Use list_files first to check what exists.",
+    "not exist": "Use list_files first to check what exists.",
+    "permission": "Check the file path — it must be inside the workspace.",
+    "HTTP": "Try a different URL or use web_search to find alternatives.",
+    "connection": "The site may be down. Try web_search for an alternative source.",
+}
+
+
+def _categorize_tool(name: str) -> str:
+    if name.startswith("web_"):
+        return "web"
+    if name.endswith("_file") or name == "list_files":
+        return "file"
+    return "system"
+
+
+def _filter_tools(tools: list[dict], used_categories: list[str]) -> list[dict]:
+    if not used_categories:
+        return tools
+    last_cat = used_categories[-1]
+    always_keep = {"get_date", "list_files", "remember", "recall"}
+    return [
+        t for t in tools
+        if _categorize_tool(t["function"]["name"]) == last_cat
+        or t["function"]["name"] in always_keep
+    ]
 
 
 def _emit(sink: EventSink, event: str, data: dict) -> None:
-    """Push an event to the sink if one is active (non-blocking)."""
     if sink is not None:
         sink.put_nowait({"event": event, "data": data})
 
 
 def _try_parse_text_tool_call(text: str) -> dict | None:
-    """Detect tool calls printed as text (Qwen 3.5 bug workaround).
-    Only matches when the JSON structure starts near the beginning of the content."""
-    # Only look at the first 200 chars for the tool call pattern start
+    """Detect tool calls printed as text (model-specific workaround)."""
     prefix = text[:200]
     match = re.search(r'\{\s*"name"\s*:\s*"(\w+)"\s*,\s*"arguments"\s*:', prefix)
     if not match:
         return None
-
     name = match.group(1)
     if not registry.get_fn(name):
         return None
-
-    # Parse the full JSON object starting from the match
     try:
         decoder = json.JSONDecoder()
         obj, _ = decoder.raw_decode(text[match.start():])
@@ -51,15 +76,29 @@ def _try_parse_text_tool_call(text: str) -> dict | None:
 
 
 def _detect_loop(tool_calls_history: list[list[str]], current_round: list[str]) -> bool:
-    """Detect if the same set of tool calls has been made N consecutive rounds."""
     if len(tool_calls_history) < MAX_LOOP_DETECT:
         return False
     recent = tool_calls_history[-MAX_LOOP_DETECT:]
     return all(r == current_round for r in recent)
 
 
+def _inject_error_hint(error_result: str, messages: list[dict]) -> None:
+    lower = error_result.lower()
+    for key, hint in _ERROR_HINTS.items():
+        if key.lower() in lower:
+            messages.append({"role": "system", "content": f"Hint: {hint}", _SYNTHETIC_TAG: True})
+            return
+
+
+def _can_parallelize(tool_calls: list[dict]) -> bool:
+    if len(tool_calls) <= 1:
+        return False
+    names = [tc.get("function", {}).get("name", "") for tc in tool_calls]
+    writers = {"write_file", "delete_file", "run_file", "run_command"}
+    return not any(n in writers for n in names)
+
+
 async def _collect_stream(chunks, sink: EventSink = None) -> tuple[dict, list[dict]]:
-    """Consume the async LLM stream, display in real-time, return (message, tool_calls)."""
     thinking_started = False
     responding_started = False
     full_content = ""
@@ -114,8 +153,8 @@ async def _collect_stream(chunks, sink: EventSink = None) -> tuple[dict, list[di
     if full_thinking:
         log_thinking(full_thinking)
 
-    # Workaround: detect tool calls printed as text
-    if not tool_calls and full_content:
+    # Model-specific text tool call workaround
+    if not tool_calls and full_content and _model_profile["text_tool_fix"]:
         parsed = _try_parse_text_tool_call(full_content)
         if parsed:
             tool_calls.append(parsed)
@@ -129,7 +168,6 @@ async def _collect_stream(chunks, sink: EventSink = None) -> tuple[dict, list[di
 
 
 async def _execute_tool(tool_call: dict, sink: EventSink = None) -> str:
-    """Validate, execute, display, and log a single tool call."""
     is_valid, error = registry.validate(tool_call)
     if not is_valid:
         display.print_tool_error(error)
@@ -157,7 +195,6 @@ async def _execute_tool(tool_call: dict, sink: EventSink = None) -> str:
 
 
 def _clean_history(messages: list[dict]) -> list[dict]:
-    """Remove synthetic orchestration messages (nudges, loop warnings) from history."""
     return [m for m in messages if not m.get(_SYNTHETIC_TAG)]
 
 
@@ -167,19 +204,43 @@ async def run_turn(
     history: list[dict],
     event_sink: EventSink = None,
 ) -> list[dict]:
-    """Run a single user turn: prompt → (tool loop) → response. Returns updated history."""
     messages = [*history, {"role": "user", "content": user_input}]
     tools = registry.get_definitions()
     silent_count = 0
     round_history: list[list[str]] = []
+    used_categories: list[str] = []
+    last_tool_name = ""
 
     loop_detected = False
+
+    # Plan-then-Execute for complex tasks
+    if AGENT_PLAN:
+        from app.agent.planner import needs_planning, make_plan
+        if needs_planning(user_input):
+            plan = await make_plan(llm, user_input)
+            if plan:
+                plan_msg = {"role": "system", "content": f"Your plan:\n{plan}\n\nExecute step by step.", _SYNTHETIC_TAG: True}
+                messages.append(plan_msg)
 
     for _ in range(MAX_TOOL_ROUNDS):
         messages = context.trim(messages)
 
-        active_tools = None if loop_detected else tools
-        chunks = llm.chat(messages, stream=True, think=LLM_THINK, tools=active_tools)
+        # Temperature phase
+        if silent_count > 0:
+            phase = "retry"
+        elif not used_categories:
+            phase = "chat"
+        elif last_tool_name in ("write_file", "run_file", "run_command"):
+            phase = "code"
+        else:
+            phase = "tool"
+
+        active_tools = None if loop_detected else _filter_tools(tools, used_categories)
+        ctx_used = context.estimate_messages(messages)
+        chunks = llm.chat(
+            messages, stream=True, think=LLM_THINK, tools=active_tools,
+            ctx_used=ctx_used, phase=phase,
+        )
         assistant_msg, tool_calls = await _collect_stream(chunks, event_sink)
         messages.append(assistant_msg)
 
@@ -210,7 +271,6 @@ async def run_turn(
 
         silent_count = 0
 
-        # Build round keys for loop detection
         current_round_keys = []
         for tc in tool_calls:
             current_round_keys.append(json.dumps(tc.get("function", {}), sort_keys=True))
@@ -223,19 +283,58 @@ async def run_turn(
             messages.append(msg)
             log_error(loop_msg, context="loop_detection")
             loop_detected = True
-            # Still execute this round's tool calls to avoid orphaned tool_calls
             for tc in tool_calls:
+                name = tc.get("function", {}).get("name", "")
                 result = await _execute_tool(tc, event_sink)
                 messages.append({"role": "tool", "content": str(result)})
+                used_categories.append(_categorize_tool(name))
+                last_tool_name = name
+                if result.startswith("ERROR"):
+                    _inject_error_hint(result, messages)
             round_history.append(current_round_keys)
             continue
 
         round_history.append(current_round_keys)
-        for tc in tool_calls:
-            result = await _execute_tool(tc, event_sink)
-            messages.append({"role": "tool", "content": str(result)})
+
+        # Parallel execution when safe
+        if _can_parallelize(tool_calls):
+            results = await asyncio.gather(*[_execute_tool(tc, event_sink) for tc in tool_calls])
+            for i, result in enumerate(results):
+                name = tool_calls[i].get("function", {}).get("name", "")
+                messages.append({"role": "tool", "content": str(result)})
+                used_categories.append(_categorize_tool(name))
+                last_tool_name = name
+                if result.startswith("ERROR"):
+                    _inject_error_hint(result, messages)
+        else:
+            for tc in tool_calls:
+                name = tc.get("function", {}).get("name", "")
+                result = await _execute_tool(tc, event_sink)
+                messages.append({"role": "tool", "content": str(result)})
+                used_categories.append(_categorize_tool(name))
+                last_tool_name = name
+                if result.startswith("ERROR"):
+                    _inject_error_hint(result, messages)
     else:
         display.print_round_limit(MAX_TOOL_ROUNDS)
         log_error("Tool rounds limit reached", context="orchestration")
+
+    # Self-reflection
+    last_assistant = next((m for m in reversed(messages) if m.get("role") == "assistant" and m.get("content")), None)
+    if last_assistant and not loop_detected:
+        reflect_msg = {"role": "system", "content": "Rate your confidence: HIGH, MEDIUM, or LOW. If LOW, explain briefly.", _SYNTHETIC_TAG: True}
+        messages.append(reflect_msg)
+        reflect_chunks = llm.chat(messages, stream=False, tools=None)
+        reflect_response, _ = await _collect_stream(reflect_chunks, event_sink)
+        reflect_text = reflect_response.get("content", "")
+        if "LOW" in reflect_text.upper() and silent_count < MAX_SILENT_RETRIES:
+            messages.append(reflect_response)
+            retry_msg = {"role": "system", "content": "Your confidence is low. Try a different approach.", _SYNTHETIC_TAG: True}
+            messages.append(retry_msg)
+            chunks = llm.chat(messages, stream=True, think=LLM_THINK, tools=tools)
+            final_msg, _ = await _collect_stream(chunks, event_sink)
+            messages.append(final_msg)
+            if final_msg.get("content"):
+                log_response(final_msg["content"])
 
     return _clean_history(messages)

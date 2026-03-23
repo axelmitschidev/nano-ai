@@ -16,6 +16,8 @@ class LLMPort(Protocol):
         stream: bool = True,
         think: bool = False,
         tools: list[dict] | None = None,
+        ctx_used: int = 0,
+        phase: str = "tool",
     ) -> AsyncIterator[dict]:
         """Send messages and yield streamed response chunks."""
         ...

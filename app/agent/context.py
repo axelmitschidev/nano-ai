@@ -51,14 +51,17 @@ def trim(messages: list) -> list:
     system_msg = messages[0]
     rest = messages[1:]
 
-    # Phase 1: compact old tool results (preserve pairing)
+    # Phase 1: compact old tool results (adaptive threshold)
+    ctx_pct = (current / max_tokens) * 100
+    threshold = max(100, 600 - int(ctx_pct * 4))
     for i, msg in enumerate(rest):
         if current <= max_tokens:
             break
-        if msg.get("role") == "tool" and len(msg.get("content", "") or "") > 200:
+        content = msg.get("content", "") or ""
+        if msg.get("role") == "tool" and len(content) > threshold:
             old = _token_cost(msg)
-            rest[i] = {"role": "tool", "content": "[truncated]"}
-            current -= old - 3
+            rest[i] = {"role": "tool", "content": f"[result: {len(content)} chars] {content[:100]}..."}
+            current -= old - _token_cost(rest[i])
 
     # Phase 2: drop oldest atomic groups (keep last 6 messages minimum)
     if current > max_tokens:

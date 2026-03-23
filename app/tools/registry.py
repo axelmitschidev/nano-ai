@@ -25,6 +25,10 @@ def register(name: str, fn: Callable, description: str, parameters: dict):
     })
 
 
+def list_tool_names() -> list[str]:
+    return list(_tools.keys())
+
+
 def get_definitions() -> list[dict]:
     return _definitions
 

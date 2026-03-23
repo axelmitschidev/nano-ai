@@ -9,25 +9,27 @@ import logging
 import httpx
 from typing import AsyncIterator
 from app.config import LLM_URL, LLM_TOKEN, LLM_MODEL, LLM_CTX
+from app.llm.profiles import detect_profile
 
 log = logging.getLogger(__name__)
 
-
-# Shorter num_predict for tool calls (tool JSON is ~50-100 tokens)
 _NUM_PREDICT_TOOLS = 512
 _NUM_PREDICT_CHAT = 1024
+
+_TEMP: dict[str, float] = {"tool": 0.1, "code": 0.05, "chat": 0.3, "retry": 0.25}
 
 
 class OllamaClient:
     """Async Ollama client with persistent connection pooling."""
 
     def __init__(self) -> None:
+        self._profile = detect_profile(LLM_MODEL)
         self._client = httpx.AsyncClient(
             timeout=httpx.Timeout(connect=10, read=300, write=10, pool=30),
             limits=httpx.Limits(
-                max_connections=10,
-                max_keepalive_connections=5,
-                keepalive_expiry=30.0,
+                max_connections=2,
+                max_keepalive_connections=2,
+                keepalive_expiry=300.0,
             ),
             headers=self._build_headers(),
         )
@@ -39,15 +41,20 @@ class OllamaClient:
             headers["Authorization"] = f"Bearer {LLM_TOKEN}"
         return headers
 
-    @staticmethod
     def _build_payload(
+        self,
         messages: list[dict],
         *,
         stream: bool,
         think: bool,
         tools: list[dict] | None = None,
+        ctx_used: int = 0,
+        phase: str = "tool",
     ) -> dict:
         has_tools = bool(tools)
+        remaining = max(256, LLM_CTX - ctx_used)
+        cap = _NUM_PREDICT_TOOLS if has_tools else _NUM_PREDICT_CHAT
+        num_predict = min(cap, int(remaining * 0.3))
         return {
             "model": LLM_MODEL,
             "messages": messages,
@@ -56,13 +63,13 @@ class OllamaClient:
             "keep_alive": -1,
             "options": {
                 "num_ctx": LLM_CTX,
-                "temperature": 0.15,
+                "temperature": _TEMP.get(phase, self._profile["temp_default"]),
                 "top_p": 0.7,
                 "top_k": 15,
-                "num_predict": _NUM_PREDICT_TOOLS if has_tools else _NUM_PREDICT_CHAT,
+                "num_predict": num_predict,
                 "repeat_penalty": 1.05,
                 "repeat_last_n": 256,
-                "stop": ["<|im_end|>"],
+                "stop": self._profile["stop"],
             },
             **({"tools": tools} if tools else {}),
         }
@@ -74,9 +81,13 @@ class OllamaClient:
         stream: bool = True,
         think: bool = False,
         tools: list[dict] | None = None,
+        ctx_used: int = 0,
+        phase: str = "tool",
     ) -> AsyncIterator[dict]:
-        """Send messages to Ollama and yield streamed chunks."""
-        payload = self._build_payload(messages, stream=stream, think=think, tools=tools)
+        payload = self._build_payload(
+            messages, stream=stream, think=think, tools=tools,
+            ctx_used=ctx_used, phase=phase,
+        )
 
         try:
             if not stream:
@@ -115,5 +126,4 @@ class OllamaClient:
             yield {"error": f"LLM client error: {e}"}
 
     async def close(self) -> None:
-        """Shut down the underlying HTTP client."""
         await self._client.aclose()
