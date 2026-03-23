@@ -210,8 +210,13 @@ async def _stream_chat(message: str, session_id: str | None) -> str | None:
     response_buf: list[str] = []
 
     try:
+        console.print("[dim]  connecting...[/dim]", end="")
         async with httpx.AsyncClient(timeout=httpx.Timeout(None)) as client:
             async with client.stream("POST", f"{SERVER_URL}/chat/stream", json=payload) as resp:
+                # Clear "connecting..." line
+                console.file.write("\033[2K\033[A\033[2K\r")
+                console.file.flush()
+
                 if resp.status_code == 409:
                     await resp.aread()
                     console.print("[yellow]Agent is still busy. Wait for it to finish.[/yellow]")
