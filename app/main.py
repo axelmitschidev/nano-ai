@@ -171,6 +171,9 @@ def _render_event(event_type: str, data: dict, response_buf: list[str]) -> None:
     elif event_type == "tool_error":
         console.print(f"  [bold red]{data.get('error', '')}[/bold red]")
 
+    elif event_type == "status":
+        console.print(f"  [dim cyan]{data.get('message', '')}[/dim cyan]")
+
     elif event_type == "stats":
         # Flush streamed response as rendered Markdown
         clean_parts = [p for p in response_buf if p != "__thinking__"]

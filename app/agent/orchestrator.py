@@ -181,6 +181,10 @@ async def _execute_tool(tool_call: dict, sink: EventSink = None) -> str:
     display.print_tool_call(name, args)
     _emit(sink, "tool_call", {"name": name, "args": args})
 
+    _slow_tools = {"web_read", "web_go", "web_click", "web_search", "run_file", "run_command"}
+    if name in _slow_tools:
+        _emit(sink, "status", {"message": f"executing {name}..."})
+
     result = await registry.execute(tool_call)
 
     if result.startswith("ERROR"):
@@ -217,17 +221,20 @@ async def run_turn(
     if AGENT_PLAN:
         from app.agent.planner import needs_planning, make_plan
         if needs_planning(user_input):
+            _emit(event_sink, "status", {"message": "planning..."})
             plan = await make_plan(llm, user_input)
             if plan:
                 plan_msg = {"role": "system", "content": f"Your plan:\n{plan}\n\nExecute step by step.", _SYNTHETIC_TAG: True}
                 messages.append(plan_msg)
+                _emit(event_sink, "status", {"message": f"plan ready ({len(plan.splitlines())} steps)"})
 
     compacted = False
 
-    for _ in range(MAX_TOOL_ROUNDS):
+    for round_num in range(MAX_TOOL_ROUNDS):
         # LLM-based compaction when context is very full (once per turn)
         ctx_usage = context.estimate_messages(messages) / (LLM_CTX * CTX_TRIM_RATIO)
         if ctx_usage > 0.80 and not compacted:
+            _emit(event_sink, "status", {"message": "compacting context..."})
             messages = await context.compact_with_llm(messages, llm)
             compacted = True
         messages = context.trim(messages)
@@ -244,6 +251,10 @@ async def run_turn(
 
         active_tools = None if loop_detected else _filter_tools(tools, used_categories)
         ctx_used = context.estimate_messages(messages)
+
+        if round_num > 0:
+            _emit(event_sink, "status", {"message": "reasoning..."})
+
         chunks = llm.chat(
             messages, stream=True, think=LLM_THINK, tools=active_tools,
             ctx_used=ctx_used, phase=phase,
