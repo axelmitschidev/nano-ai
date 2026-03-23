@@ -39,7 +39,11 @@ echo "Installing dependencies..."
 .venv/bin/pip install -q -r requirements.txt
 
 echo "Installing browser (Chromium)..."
-.venv/bin/playwright install chromium 2>/dev/null
+if [[ "$(uname)" == "Linux" ]]; then
+    .venv/bin/playwright install --with-deps chromium 2>/dev/null
+else
+    .venv/bin/playwright install chromium 2>/dev/null
+fi
 
 # 5. Config
 if [ ! -f ".env" ]; then

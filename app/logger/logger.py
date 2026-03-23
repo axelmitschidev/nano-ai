@@ -8,15 +8,14 @@ from app.config import LOGS_DIR
 os.makedirs(LOGS_DIR, exist_ok=True)
 
 _file_handle = None
-_session_path: str | None = None
 
 
 def _get_handle():
-    global _file_handle, _session_path
+    global _file_handle
     if _file_handle is None or _file_handle.closed:
         ts = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
-        _session_path = os.path.join(LOGS_DIR, f"session_{ts}.jsonl")
-        _file_handle = open(_session_path, "a")
+        path = os.path.join(LOGS_DIR, f"session_{ts}.jsonl")
+        _file_handle = open(path, "a")
     return _file_handle
 
 

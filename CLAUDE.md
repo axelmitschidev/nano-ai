@@ -92,7 +92,7 @@ Tools are the agent's hands. Every tool function **must return a `str`** — the
 
 `app/agent/context.py` — two-phase sliding window, called every loop iteration:
 1. Compact old tool results >200 chars to `[truncated]`
-2. Drop oldest messages (keep last 6 minimum)
+2. Drop oldest atomic groups (keep last 3 groups minimum)
 
 Token estimation is `len(content) // 3` (conservative). Budget = `LLM_CTX * CTX_TRIM_RATIO` (75%) minus 1200 tokens tool schema overhead. Tool call/result groups are trimmed as atomic units to preserve message sequence validity. System prompt (messages[0]) is never trimmed.
 
@@ -131,8 +131,8 @@ Hardcoded agent constants in `config.py`: `MAX_TOOL_ROUNDS=10`, `MAX_SILENT_RETR
 ## Code conventions
 
 - DDD-oriented, SOLID principles. One concern per module.
-- Async-first: the entire LLM→orchestrator→server chain is async. No `run_in_executor`.
+- Async-first: the entire LLM→orchestrator→server chain is async. `asyncio.to_thread` used only for blocking I/O (input, DuckDuckGo).
 - Type hints on signatures. Module-level docstrings. No per-function docstrings unless non-obvious.
 - Linter: `ruff check app/` must pass.
-- Dependencies: stdlib + httpx + playwright + fastapi + ddgs + html2text + python-dotenv. No heavy frameworks.
+- Dependencies: httpx + playwright + fastapi + ddgs + html2text + python-dotenv + rich. No heavy frameworks.
 - Respond in French when communicating with the user.

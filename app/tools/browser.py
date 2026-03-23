@@ -99,11 +99,6 @@ def _to_markdown(html: str) -> str:
     return "\n".join(cleaned).strip()
 
 
-def _css_escape(value: str) -> str:
-    """Escape a string for use inside a CSS attribute selector value."""
-    return value.replace("\\", "\\\\").replace('"', '\\"')
-
-
 async def _get_elements(page) -> str:
     elements = await page.evaluate("""() => {
         function esc(s) { return s.replace(/\\\\/g, '\\\\\\\\').replace(/"/g, '\\\\"'); }

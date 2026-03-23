@@ -3,25 +3,12 @@
 import json
 from rich.console import Console
 from rich.markdown import Markdown
-from rich.panel import Panel
 from rich.text import Text
 
 console = Console()
 
 # Buffer for streaming response — rendered as Markdown at flush time
 _response_buf: list[str] = []
-
-
-def print_banner(model: str, ctx: int):
-    console.print(
-        Panel(
-            f"[dim]ctx={ctx} | model={model}[/dim]",
-            title="[bold]Nano Agent[/bold]",
-            border_style="dim",
-            expand=False,
-        )
-    )
-    console.print()
 
 
 def print_thinking_start():
@@ -96,7 +83,3 @@ def print_round_limit(limit: int):
 
 def print_parsed_tool():
     console.print("\n[dim yellow](parsed tool call from text)[/dim yellow]")
-
-
-def print_end():
-    console.print("\n[dim]Session ended.[/dim]")

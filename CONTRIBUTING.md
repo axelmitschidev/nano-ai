@@ -37,6 +37,6 @@ See existing tools for examples.
 
 - **Single Responsibility** — one concern per file
 - **Open/Closed** — extend via registry, don't modify core
-- **No framework dependencies** — stdlib + httpx + playwright only
+- **Minimal dependencies** — httpx, fastapi, playwright, rich + a few lightweight libs
 - Tools must return strings (the LLM reads them)
 - All file operations sandboxed to `app/workspace/`

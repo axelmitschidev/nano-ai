@@ -33,10 +33,6 @@ def get_fn(name: str) -> Callable | None:
     return _tools.get(name)
 
 
-def list_names() -> list[str]:
-    return list(_tools.keys())
-
-
 def validate(tool_call: dict) -> tuple[bool, str | None]:
     """Validate a tool call before execution."""
     func = tool_call.get("function", {})
