@@ -19,7 +19,7 @@
 
 ---
 
-## Benchmark — what a 2B model can actually do
+## Benchmark — what a 4B model can actually do
 
 We built an [end-to-end benchmark](e2e_bench.py) that tests the agent on real autonomous tasks, from simple chat to multi-step web research. Here are the results on a MacBook with **Qwen 3.5 4B**:
 
@@ -51,30 +51,19 @@ Run it yourself: `.venv/bin/python e2e_bench.py`
 
 ## Quickstart
 
-### Option 1 — Local (recommended)
-
 ```bash
-# Install Ollama
-brew install ollama        # macOS
-# or: curl -fsSL https://ollama.com/install.sh | sh  # Linux
-
-# Pull the model (~1.5 GB)
-ollama pull huihui_ai/qwen3.5-abliterated:4b
-
-# Clone and setup
 git clone https://github.com/axelmitschidev/nano-ai.git
 cd nano-ai
-./setup.sh
-
-# Launch
+./setup.sh            # installs Ollama model, Python deps, browser
 .venv/bin/python -m app.main
 ```
 
-### Option 2 — Docker
+`setup.sh` handles everything: checks Ollama is installed, pulls the model if missing, creates the venv, installs dependencies and Chromium.
+
+<details>
+<summary>Docker alternative</summary>
 
 ```bash
-git clone https://github.com/axelmitschidev/nano-ai.git && cd nano-ai
-
 # Mac (Ollama must be running natively for Metal GPU)
 docker compose --profile mac up -d --build
 
@@ -82,7 +71,10 @@ docker compose --profile mac up -d --build
 docker compose --profile linux up -d --build
 ```
 
-### Option 3 — API only
+</details>
+
+<details>
+<summary>API mode</summary>
 
 ```bash
 .venv/bin/uvicorn app.server:app --host 0.0.0.0 --port 8000
@@ -93,6 +85,8 @@ curl -X POST http://localhost:8000/chat \
   -H "Content-Type: application/json" \
   -d '{"message": "search the web for the latest AI news and save a summary"}'
 ```
+
+</details>
 
 ---
 

@@ -1,9 +1,35 @@
 #!/usr/bin/env bash
 set -e
 
+MODEL="huihui_ai/qwen3.5-abliterated:4b"
+
 echo "=== nano-ai setup ==="
 
-# Create virtual environment
+# 1. Check Ollama
+if ! command -v ollama &>/dev/null; then
+    echo ""
+    echo "[!] Ollama is not installed."
+    echo ""
+    echo "  macOS:  brew install ollama"
+    echo "  Linux:  curl -fsSL https://ollama.com/install.sh | sh"
+    echo ""
+    exit 1
+fi
+
+# 2. Start Ollama if not running
+if ! curl -sf http://localhost:11434/api/tags &>/dev/null; then
+    echo "Starting Ollama..."
+    ollama serve &>/dev/null &
+    sleep 2
+fi
+
+# 3. Pull model if missing
+if ! ollama list 2>/dev/null | grep -q "qwen3.5-abliterated"; then
+    echo "Pulling model ($MODEL)..."
+    ollama pull "$MODEL"
+fi
+
+# 4. Python venv + deps
 if [ ! -d ".venv" ]; then
     echo "Creating virtual environment..."
     python3 -m venv .venv
@@ -15,20 +41,15 @@ echo "Installing dependencies..."
 echo "Installing browser (Chromium)..."
 .venv/bin/playwright install chromium 2>/dev/null
 
-# Create .env if missing
+# 5. Config
 if [ ! -f ".env" ]; then
     cp .env.example .env
-    echo "Created .env from .env.example"
 fi
 
-# Create workspace/logs dirs
 mkdir -p app/workspace app/logs
 
 echo ""
 echo "=== Ready ==="
 echo ""
-echo "  CLI mode:  .venv/bin/python -m app.main"
-echo "  API mode:  .venv/bin/uvicorn app.server:app --host 0.0.0.0 --port 8000"
-echo ""
-echo "  Make sure Ollama is running: ollama serve"
+echo "  .venv/bin/python -m app.main"
 echo ""
