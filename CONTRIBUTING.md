@@ -5,10 +5,7 @@
 ```bash
 git clone https://github.com/axelmitschidev/nano-ai.git
 cd nano-ai
-python -m venv .venv && source .venv/bin/activate
-pip install -r requirements.txt
-playwright install chromium
-cp .env.example .env
+./setup.sh
 ```
 
 ## Workflow

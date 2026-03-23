@@ -14,12 +14,20 @@ def _safe_path(path: str) -> str:
     return full
 
 
+_BINARY_EXTENSIONS = frozenset({".png", ".jpg", ".jpeg", ".gif", ".bmp", ".ico", ".webp",
+    ".pdf", ".zip", ".tar", ".gz", ".bz2", ".7z", ".rar",
+    ".mp3", ".mp4", ".wav", ".avi", ".mov", ".mkv",
+    ".exe", ".dll", ".so", ".dylib", ".wasm", ".pyc"})
+
+
 def _sanitize_code(content: str, path: str) -> str:
-    """Fix common LLM code generation issues (smart quotes, etc.)."""
-    if path.endswith((".py", ".js", ".sh", ".json")):
-        content = content.replace("\u2018", "'").replace("\u2019", "'")
-        content = content.replace("\u201c", '"').replace("\u201d", '"')
-        content = content.replace("\u2013", "-").replace("\u2014", "--")
+    """Fix common LLM code generation issues (smart quotes, etc.) for all text files."""
+    ext = os.path.splitext(path)[1].lower()
+    if ext in _BINARY_EXTENSIONS:
+        return content
+    content = content.replace("\u2018", "'").replace("\u2019", "'")
+    content = content.replace("\u201c", '"').replace("\u201d", '"')
+    content = content.replace("\u2013", "-").replace("\u2014", "--")
     return content
 
 

@@ -88,6 +88,7 @@ async def chat(req: ChatRequest):
     async with session.lock:
         log_user(req.message)
         session.history = await run_turn(llm_client, req.message, session.history)
+        session.touch()
 
     # Extract the last assistant message
     for msg in reversed(session.history):
@@ -102,6 +103,7 @@ async def chat_stream(req: ChatRequest):
     """Send a message and stream agent events via SSE."""
     session_id, session = sessions.get_or_create(req.session_id)
 
+    # Atomic check-and-acquire to avoid TOCTOU race
     if session.lock.locked():
         raise HTTPException(409, "Session is busy — agent is still processing a previous request.")
 
@@ -114,6 +116,7 @@ async def chat_stream(req: ChatRequest):
                 session.history = await run_turn(
                     llm_client, req.message, session.history, event_sink=queue,
                 )
+                session.touch()
             except Exception as e:
                 queue.put_nowait({"event": "error", "data": {"message": str(e)}})
             finally:
@@ -129,6 +132,9 @@ async def chat_stream(req: ChatRequest):
             try:
                 event = await asyncio.wait_for(queue.get(), timeout=300)
             except asyncio.TimeoutError:
+                if task.done():
+                    yield "event: done\ndata: {}\n\n"
+                    break
                 yield "event: ping\ndata: {}\n\n"
                 continue
             if event is None:

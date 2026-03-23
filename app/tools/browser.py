@@ -10,6 +10,21 @@ from app.tools import registry
 
 _stealth = Stealth()
 _session = {"pw": None, "browser": None, "context": None, "page": None}
+_browser_lock = asyncio.Lock()
+
+# Reusable HTTP client for web_read (connection pooling)
+_http_client: httpx.AsyncClient | None = None
+
+
+def _get_http_client() -> httpx.AsyncClient:
+    global _http_client
+    if _http_client is None or _http_client.is_closed:
+        _http_client = httpx.AsyncClient(
+            timeout=httpx.Timeout(10),
+            follow_redirects=True,
+            headers={"User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36"},
+        )
+    return _http_client
 
 
 # --- Browser lifecycle ---
@@ -41,7 +56,8 @@ async def _ensure_browser():
 
 async def close_browser():
     """Shut down the browser and free all resources."""
-    for key in ("context", "browser"):
+    # Close page first, then context, then browser
+    for key in ("page", "context", "browser"):
         try:
             if _session[key]:
                 await _session[key].close()
@@ -53,6 +69,12 @@ async def close_browser():
     except Exception:
         pass
     _session.update(pw=None, browser=None, context=None, page=None)
+
+    # Close shared HTTP client
+    global _http_client
+    if _http_client and not _http_client.is_closed:
+        await _http_client.aclose()
+        _http_client = None
 
 
 # --- Helpers ---
@@ -77,8 +99,14 @@ def _to_markdown(html: str) -> str:
     return "\n".join(cleaned).strip()
 
 
+def _css_escape(value: str) -> str:
+    """Escape a string for use inside a CSS attribute selector value."""
+    return value.replace("\\", "\\\\").replace('"', '\\"')
+
+
 async def _get_elements(page) -> str:
     elements = await page.evaluate("""() => {
+        function esc(s) { return s.replace(/\\\\/g, '\\\\\\\\').replace(/"/g, '\\\\"'); }
         const out = [];
         document.querySelectorAll('a[href], button, input, select, textarea, [role="button"]')
             .forEach((el, i) => {
@@ -89,9 +117,9 @@ async def _get_elements(page) -> str:
                 const ph = el.placeholder || '', aria = el.getAttribute('aria-label') || '';
                 const href = el.href || '';
 
-                let sel = id ? '#'+id : name ? `${tag}[name="${name}"]`
-                    : ph ? `${tag}[placeholder="${ph}"]` : aria ? `[aria-label="${aria}"]`
-                    : text && tag !== 'input' ? `${tag}:has-text("${text.substring(0,40)}")`
+                let sel = id ? '#'+CSS.escape(id) : name ? `${tag}[name="${esc(name)}"]`
+                    : ph ? `${tag}[placeholder="${esc(ph)}"]` : aria ? `[aria-label="${esc(aria)}"]`
+                    : text && tag !== 'input' ? `${tag}:has-text("${esc(text.substring(0,40))}")`
                     : `${tag}:nth-of-type(${i+1})`;
 
                 let desc = tag === 'input' || tag === 'textarea'
@@ -136,11 +164,10 @@ async def web_search(query: str, max_results: int = 5) -> str:
 
 async def web_read(url: str) -> str:
     async def _do():
+        # Try plain HTTP first
         try:
-            async with httpx.AsyncClient() as client:
-                res = await client.get(url, timeout=10, follow_redirects=True, headers={
-                    "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36"
-                })
+            client = _get_http_client()
+            res = await client.get(url)
             if res.status_code == 200 and len(res.text) > 500:
                 md = _to_markdown(res.text)
                 if len(md) > 200:
@@ -148,47 +175,52 @@ async def web_read(url: str) -> str:
         except Exception:
             pass
 
-        page = await _ensure_browser()
-        await page.goto(url, wait_until="domcontentloaded", timeout=15000)
-        await page.wait_for_timeout(2000)
-        await page.evaluate("""
-            ['nav','footer','header','.cookie-banner','#cookie-consent','.ad','.ads',
-             '.sidebar','.menu','script','style','noscript','iframe']
-            .forEach(s => document.querySelectorAll(s).forEach(el => el.remove()));
-        """)
-        md = _to_markdown(await page.content())
-        return md[:4000] + "\n\n[... truncated ...]" if len(md) > 4000 else md
+        # Fallback to browser (serialized access)
+        async with _browser_lock:
+            page = await _ensure_browser()
+            await page.goto(url, wait_until="domcontentloaded", timeout=15000)
+            await page.wait_for_timeout(2000)
+            await page.evaluate("""
+                ['nav','footer','header','.cookie-banner','#cookie-consent','.ad','.ads',
+                 '.sidebar','.menu','script','style','noscript','iframe']
+                .forEach(s => document.querySelectorAll(s).forEach(el => el.remove()));
+            """)
+            md = _to_markdown(await page.content())
+            return md[:4000] + "\n\n[... truncated ...]" if len(md) > 4000 else md
 
     return await _retry(_do)
 
 
 async def web_go(url: str) -> str:
     async def _do():
-        page = await _ensure_browser()
-        await page.goto(url, wait_until="domcontentloaded", timeout=15000)
-        await page.wait_for_timeout(2000)
-        elements = await _get_elements(page)
-        title = await page.title()
-        return f"Page: {title}\nURL: {page.url}\n\nElements:\n{elements}"
+        async with _browser_lock:
+            page = await _ensure_browser()
+            await page.goto(url, wait_until="domcontentloaded", timeout=15000)
+            await page.wait_for_timeout(2000)
+            elements = await _get_elements(page)
+            title = await page.title()
+            return f"Page: {title}\nURL: {page.url}\n\nElements:\n{elements}"
     return await _retry(_do)
 
 
 async def web_click(selector: str) -> str:
     async def _do():
-        page = await _ensure_browser()
-        await page.click(selector, timeout=5000)
-        await page.wait_for_timeout(1500)
-        elements = await _get_elements(page)
-        title = await page.title()
-        return f"Clicked. Page: {title}\nURL: {page.url}\n\nElements:\n{elements}"
+        async with _browser_lock:
+            page = await _ensure_browser()
+            await page.click(selector, timeout=5000)
+            await page.wait_for_timeout(1500)
+            elements = await _get_elements(page)
+            title = await page.title()
+            return f"Clicked. Page: {title}\nURL: {page.url}\n\nElements:\n{elements}"
     return await _retry(_do)
 
 
 async def web_type(selector: str, text: str) -> str:
     async def _do():
-        page = await _ensure_browser()
-        await page.fill(selector, text, timeout=5000)
-        return f"Typed '{text}' into {selector}."
+        async with _browser_lock:
+            page = await _ensure_browser()
+            await page.fill(selector, text, timeout=5000)
+            return f"Typed '{text}' into {selector}."
     return await _retry(_do)
 
 

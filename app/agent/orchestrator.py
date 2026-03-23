@@ -6,6 +6,7 @@ Dependency Inversion: depends on LLMPort protocol, not a concrete client.
 
 import asyncio
 import json
+import re
 from app.config import LLM_CTX, LLM_THINK, MAX_TOOL_ROUNDS, MAX_SILENT_RETRIES, MAX_LOOP_DETECT
 from app.llm.port import LLMPort
 from app.tools import registry
@@ -14,6 +15,9 @@ from app.logger.logger import log_thinking, log_tool, log_response, log_error
 
 
 EventSink = asyncio.Queue | None
+
+# Tags for synthetic messages that should be cleaned from history
+_SYNTHETIC_TAG = "__synthetic__"
 
 
 def _emit(sink: EventSink, event: str, data: dict) -> None:
@@ -24,10 +28,10 @@ def _emit(sink: EventSink, event: str, data: dict) -> None:
 
 def _try_parse_text_tool_call(text: str) -> dict | None:
     """Detect tool calls printed as text (Qwen 3.5 bug workaround).
-    Uses json.JSONDecoder for proper nested JSON parsing."""
-    import re
-
-    match = re.search(r'"name"\s*:\s*"(\w+)".*?"arguments"\s*:\s*', text, re.DOTALL)
+    Only matches when the JSON structure starts near the beginning of the content."""
+    # Only look at the first 200 chars for the tool call pattern start
+    prefix = text[:200]
+    match = re.search(r'\{\s*"name"\s*:\s*"(\w+)"\s*,\s*"arguments"\s*:', prefix)
     if not match:
         return None
 
@@ -35,25 +39,23 @@ def _try_parse_text_tool_call(text: str) -> dict | None:
     if not registry.get_fn(name):
         return None
 
-    args_start = text.find("{", match.end() - 1)
-    if args_start == -1:
-        return None
-
+    # Parse the full JSON object starting from the match
     try:
         decoder = json.JSONDecoder()
-        args, _ = decoder.raw_decode(text[args_start:])
-        if isinstance(args, dict):
-            return {"function": {"name": name, "arguments": args}}
+        obj, _ = decoder.raw_decode(text[match.start():])
+        if isinstance(obj, dict) and "arguments" in obj and isinstance(obj["arguments"], dict):
+            return {"function": {"name": name, "arguments": obj["arguments"]}}
     except (json.JSONDecodeError, ValueError):
         pass
     return None
 
 
-def _detect_loop(tool_calls_history: list[str], tool_call: dict) -> bool:
-    """Detect if the same tool+args has been called N times in a row."""
-    key = json.dumps(tool_call.get("function", {}), sort_keys=True)
+def _detect_loop(tool_calls_history: list[list[str]], current_round: list[str]) -> bool:
+    """Detect if the same set of tool calls has been made N consecutive rounds."""
+    if len(tool_calls_history) < MAX_LOOP_DETECT:
+        return False
     recent = tool_calls_history[-MAX_LOOP_DETECT:]
-    return recent.count(key) >= MAX_LOOP_DETECT
+    return all(r == current_round for r in recent)
 
 
 async def _collect_stream(chunks, sink: EventSink = None) -> tuple[dict, list[dict]]:
@@ -154,6 +156,11 @@ async def _execute_tool(tool_call: dict, sink: EventSink = None) -> str:
     return result
 
 
+def _clean_history(messages: list[dict]) -> list[dict]:
+    """Remove synthetic orchestration messages (nudges, loop warnings) from history."""
+    return [m for m in messages if not m.get(_SYNTHETIC_TAG)]
+
+
 async def run_turn(
     llm: LLMPort,
     user_input: str,
@@ -164,18 +171,26 @@ async def run_turn(
     messages = [*history, {"role": "user", "content": user_input}]
     tools = registry.get_definitions()
     silent_count = 0
-    tool_calls_history: list[str] = []
+    round_history: list[list[str]] = []
+
+    loop_detected = False
 
     for _ in range(MAX_TOOL_ROUNDS):
         messages = context.trim(messages)
 
-        chunks = llm.chat(messages, stream=True, think=LLM_THINK, tools=tools)
+        active_tools = None if loop_detected else tools
+        chunks = llm.chat(messages, stream=True, think=LLM_THINK, tools=active_tools)
         assistant_msg, tool_calls = await _collect_stream(chunks, event_sink)
         messages.append(assistant_msg)
 
         if not tool_calls:
             if assistant_msg.get("content"):
                 log_response(assistant_msg["content"])
+                break
+
+            if loop_detected:
+                display.print_silent_fail(0)
+                log_error("Model silent after loop detection", context="orchestration")
                 break
 
             silent_count += 1
@@ -185,26 +200,42 @@ async def run_turn(
                 break
 
             display.print_retry(silent_count, MAX_SILENT_RETRIES)
-            messages.append({"role": "user", "content": "You must respond now. Either call a tool or answer."})
+            nudge = {"role": "system", "content": "Respond now. Either call a tool or answer the user.", _SYNTHETIC_TAG: True}
+            messages.append(nudge)
             continue
 
+        if loop_detected:
+            log_error("Model called tools after loop detection, ending turn", context="loop_detection")
+            break
+
         silent_count = 0
+
+        # Build round keys for loop detection
+        current_round_keys = []
         for tc in tool_calls:
-            tc_key = json.dumps(tc.get("function", {}), sort_keys=True)
+            current_round_keys.append(json.dumps(tc.get("function", {}), sort_keys=True))
 
-            if _detect_loop(tool_calls_history, tc):
-                loop_msg = f"Loop detected: '{tc['function']['name']}' called {MAX_LOOP_DETECT} times with same args. Answer with what you have."
-                display.print_tool_error(loop_msg)
-                _emit(event_sink, "tool_error", {"error": loop_msg})
-                messages.append({"role": "user", "content": loop_msg})
-                log_error(loop_msg, context="loop_detection")
-                break
+        if _detect_loop(round_history, current_round_keys):
+            loop_msg = f"Loop detected: same tool calls repeated {MAX_LOOP_DETECT} times. Answer with what you have."
+            display.print_tool_error(loop_msg)
+            _emit(event_sink, "tool_error", {"error": loop_msg})
+            msg = {"role": "system", "content": loop_msg, _SYNTHETIC_TAG: True}
+            messages.append(msg)
+            log_error(loop_msg, context="loop_detection")
+            loop_detected = True
+            # Still execute this round's tool calls to avoid orphaned tool_calls
+            for tc in tool_calls:
+                result = await _execute_tool(tc, event_sink)
+                messages.append({"role": "tool", "content": str(result)})
+            round_history.append(current_round_keys)
+            continue
 
-            tool_calls_history.append(tc_key)
+        round_history.append(current_round_keys)
+        for tc in tool_calls:
             result = await _execute_tool(tc, event_sink)
             messages.append({"role": "tool", "content": str(result)})
     else:
         display.print_round_limit(MAX_TOOL_ROUNDS)
         log_error("Tool rounds limit reached", context="orchestration")
 
-    return messages
+    return _clean_history(messages)

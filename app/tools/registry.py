@@ -51,10 +51,17 @@ def validate(tool_call: dict) -> tuple[bool, str | None]:
 
     for defn in _definitions:
         if defn["function"]["name"] == name:
-            required = defn["function"]["parameters"].get("required", [])
+            params = defn["function"]["parameters"]
+            required = params.get("required", [])
             missing = [r for r in required if r not in args]
             if missing:
                 return False, f"ERROR: '{name}' missing required args: {', '.join(missing)}"
+            # Strip unknown arguments
+            known = set(params.get("properties", {}).keys())
+            if known:
+                for key in list(args.keys()):
+                    if key not in known:
+                        del args[key]
             break
 
     return True, None

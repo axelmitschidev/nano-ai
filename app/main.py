@@ -9,6 +9,7 @@ import json
 import os
 import subprocess
 import sys
+import tempfile
 from pathlib import Path
 
 import httpx
@@ -42,13 +43,14 @@ async def _ensure_server() -> dict | None:
         return health
 
     console.print("[dim]Starting server...[/dim]")
+    _stderr_log = tempfile.NamedTemporaryFile(prefix="nano-server-", suffix=".log", delete=False, mode="w")
     subprocess.Popen(
         [
             sys.executable, "-m", "uvicorn", "app.server:app",
             "--host", "127.0.0.1", "--port", SERVER_PORT, "--log-level", "warning",
         ],
         stdout=subprocess.DEVNULL,
-        stderr=subprocess.DEVNULL,
+        stderr=_stderr_log,
     )
 
     for _ in range(15):
@@ -57,6 +59,14 @@ async def _ensure_server() -> dict | None:
         if health:
             return health
 
+    # Show server error log on failure
+    try:
+        with open(_stderr_log.name) as f:
+            err = f.read().strip()
+        if err:
+            console.print(f"[red]Server stderr:[/red]\n[dim]{err[:500]}[/dim]")
+    except Exception:
+        pass
     return None
 
 

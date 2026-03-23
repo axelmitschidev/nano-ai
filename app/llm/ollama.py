@@ -5,8 +5,12 @@ Uses a persistent AsyncClient with connection pooling for optimal performance.
 """
 
 import json
+import logging
 import httpx
+from typing import AsyncIterator
 from app.config import LLM_URL, LLM_TOKEN, LLM_MODEL, LLM_CTX
+
+log = logging.getLogger(__name__)
 
 
 # Shorter num_predict for tool calls (tool JSON is ~50-100 tokens)
@@ -49,7 +53,7 @@ class OllamaClient:
             "messages": messages,
             "stream": stream,
             "think": think,
-            "keep_alive": "0",
+            "keep_alive": -1,
             "options": {
                 "num_ctx": LLM_CTX,
                 "temperature": 0.15,
@@ -70,17 +74,21 @@ class OllamaClient:
         stream: bool = True,
         think: bool = False,
         tools: list[dict] | None = None,
-    ):
+    ) -> AsyncIterator[dict]:
         """Send messages to Ollama and yield streamed chunks."""
         payload = self._build_payload(messages, stream=stream, think=think, tools=tools)
 
         try:
             if not stream:
                 resp = await self._client.post(LLM_URL, json=payload)
+                if resp.status_code != 200:
+                    body = resp.text[:200]
+                    yield {"error": f"LLM HTTP {resp.status_code}: {body}"}
+                    return
                 try:
                     data = resp.json()
                 except (json.JSONDecodeError, ValueError):
-                    yield {"error": f"Invalid response from LLM (HTTP {resp.status_code})"}
+                    yield {"error": f"Invalid JSON from LLM (HTTP {resp.status_code})"}
                     return
                 if "error" in data:
                     yield {"error": data["error"]}
@@ -89,11 +97,16 @@ class OllamaClient:
                 return
 
             async with self._client.stream("POST", LLM_URL, json=payload) as resp:
+                if resp.status_code != 200:
+                    body = (await resp.aread()).decode(errors="replace")[:200]
+                    yield {"error": f"LLM HTTP {resp.status_code}: {body}"}
+                    return
                 async for line in resp.aiter_lines():
                     if line:
                         try:
                             yield json.loads(line)
                         except json.JSONDecodeError:
+                            log.warning("Unparseable LLM chunk: %s", line[:100])
                             continue
 
         except httpx.HTTPError as e:

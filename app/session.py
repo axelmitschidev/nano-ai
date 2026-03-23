@@ -5,12 +5,15 @@ Single Responsibility: owns session lifecycle (create, retrieve, expire, cleanup
 
 import uuid
 import asyncio
+import logging
 from datetime import datetime, timezone
 
 from app.agent.prompt import load_system_prompt
 
 TTL_SECONDS = 3600
 MAX_SESSIONS = 100
+
+log = logging.getLogger(__name__)
 
 
 class Session:
@@ -52,10 +55,16 @@ class SessionStore:
         session = Session()
         self._sessions[new_id] = session
 
-        # Evict oldest if over capacity
+        # Evict oldest if over capacity (skip locked sessions)
         if len(self._sessions) > MAX_SESSIONS:
-            oldest_id = min(self._sessions, key=lambda k: self._sessions[k].last_active)
-            del self._sessions[oldest_id]
+            candidates = [
+                (sid, s) for sid, s in self._sessions.items()
+                if not s.lock.locked() and sid != new_id
+            ]
+            if candidates:
+                oldest_id = min(candidates, key=lambda x: x[1].last_active)[0]
+                del self._sessions[oldest_id]
+                log.warning("Session %s evicted (capacity)", oldest_id[:8])
 
         return new_id, session
 
@@ -75,7 +84,10 @@ class SessionStore:
         return len(self._sessions)
 
     def _evict_expired(self) -> None:
-        expired = [sid for sid, s in self._sessions.items() if s.is_expired()]
+        expired = [
+            sid for sid, s in self._sessions.items()
+            if s.is_expired() and not s.lock.locked()
+        ]
         for sid in expired:
             del self._sessions[sid]
 
@@ -91,4 +103,7 @@ class SessionStore:
     async def _periodic_cleanup(self) -> None:
         while True:
             await asyncio.sleep(300)
-            self._evict_expired()
+            try:
+                self._evict_expired()
+            except Exception:
+                log.exception("Session cleanup error")

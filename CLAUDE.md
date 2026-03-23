@@ -67,7 +67,7 @@ POST /chat (server.py)
 The orchestrator depends on `LLMPort` (Protocol in `app/llm/port.py`), not on `OllamaClient` directly. To add a new LLM backend, implement `chat()` (async generator yielding dicts) and `close()`. The orchestrator doesn't care what's behind the protocol.
 
 `OllamaClient` (`app/llm/ollama.py`) uses a persistent `httpx.AsyncClient` with connection pooling. Key behavior:
-- `keep_alive: "-1"` → model stays loaded permanently in Ollama
+- `keep_alive: -1` (integer) → model stays loaded permanently in Ollama
 - `num_predict` is dynamic: 512 when tools are present (tool JSON is short), 1024 for chat responses
 - Streaming: yields newline-delimited JSON chunks from Ollama's `/api/chat`
 
@@ -82,7 +82,7 @@ Tools are the agent's hands. Every tool function **must return a `str`** — the
 **Existing tool modules**:
 - `workspace.py` — file CRUD, sandboxed via `_safe_path()` (realpath check against `WORKSPACE_DIR`). `_sanitize_code()` fixes LLM smart quotes in code files.
 - `browser.py` — Playwright stealth browser (lazy-launched on first use). `web_read` tries plain httpx first, falls back to full browser. `web_go`/`web_click`/`web_type` for interactive navigation. `_get_elements()` extracts up to 50 visible interactive elements with auto-generated CSS selectors. DuckDuckGo search via `ddgs` library.
-- `system.py` — `get_date` and `run_file` (subprocess with 30s timeout, sandboxed to workspace).
+- `system.py` — `get_date` and `run_file` (subprocess with 30s timeout, sandboxed to workspace, stripped env vars, process group kill on timeout). Shell scripts (.sh) disabled for security.
 
 ### Qwen 3.5 workaround
 
@@ -94,7 +94,7 @@ Tools are the agent's hands. Every tool function **must return a `str`** — the
 1. Compact old tool results >200 chars to `[truncated]`
 2. Drop oldest messages (keep last 6 minimum)
 
-Token estimation is `len(content) // 4`. Budget = `LLM_CTX * CTX_TRIM_RATIO` (75%). System prompt (messages[0]) is never trimmed.
+Token estimation is `len(content) // 3` (conservative). Budget = `LLM_CTX * CTX_TRIM_RATIO` (75%) minus 1200 tokens tool schema overhead. Tool call/result groups are trimmed as atomic units to preserve message sequence validity. System prompt (messages[0]) is never trimmed.
 
 ### Session lifecycle
 
@@ -116,7 +116,7 @@ Two compose profiles:
 
 Ollama optimization env vars (in `linux` profile): `OLLAMA_KEEP_ALIVE=-1`, `OLLAMA_FLASH_ATTENTION=1`, `OLLAMA_KV_CACHE_TYPE=q8_0`, `OLLAMA_NUM_PARALLEL=1`, `OLLAMA_MAX_LOADED_MODELS=1`.
 
-Dockerfile runs `uvicorn` with 2 workers, uvloop event loop, httptools HTTP parser.
+Dockerfile runs `uvicorn` with 1 worker (single process — browser and logger use module-level state), uvloop event loop, httptools HTTP parser.
 
 ## Configuration
 
