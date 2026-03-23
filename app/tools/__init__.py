@@ -22,3 +22,9 @@ def register_all():
         {"type": "object", "properties": {
             "query": {"type": "string", "description": "Search term to find in memory"},
         }, "required": ["query"]})
+    registry.register("note_progress", agent_memory.note_progress,
+        "Track your progress on long tasks. Use 'append' to add a note, 'read' to review, 'clear' to reset.",
+        {"type": "object", "properties": {
+            "action": {"type": "string", "description": "read, append, or clear"},
+            "content": {"type": "string", "description": "Note to add (for append)"},
+        }, "required": ["action"]})

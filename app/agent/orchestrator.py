@@ -7,7 +7,7 @@ Dependency Inversion: depends on LLMPort protocol, not a concrete client.
 import asyncio
 import json
 import re
-from app.config import LLM_CTX, LLM_MODEL, LLM_THINK, MAX_TOOL_ROUNDS, MAX_SILENT_RETRIES, MAX_LOOP_DETECT, AGENT_PLAN
+from app.config import LLM_CTX, LLM_MODEL, LLM_THINK, MAX_TOOL_ROUNDS, MAX_SILENT_RETRIES, MAX_LOOP_DETECT, AGENT_PLAN, CTX_TRIM_RATIO
 from app.llm.port import LLMPort
 from app.llm.profiles import detect_profile
 from app.tools import registry
@@ -222,7 +222,14 @@ async def run_turn(
                 plan_msg = {"role": "system", "content": f"Your plan:\n{plan}\n\nExecute step by step.", _SYNTHETIC_TAG: True}
                 messages.append(plan_msg)
 
+    compacted = False
+
     for _ in range(MAX_TOOL_ROUNDS):
+        # LLM-based compaction when context is very full (once per turn)
+        ctx_usage = context.estimate_messages(messages) / (LLM_CTX * CTX_TRIM_RATIO)
+        if ctx_usage > 0.80 and not compacted:
+            messages = await context.compact_with_llm(messages, llm)
+            compacted = True
         messages = context.trim(messages)
 
         # Temperature phase
@@ -318,23 +325,5 @@ async def run_turn(
     else:
         display.print_round_limit(MAX_TOOL_ROUNDS)
         log_error("Tool rounds limit reached", context="orchestration")
-
-    # Self-reflection
-    last_assistant = next((m for m in reversed(messages) if m.get("role") == "assistant" and m.get("content")), None)
-    if last_assistant and not loop_detected:
-        reflect_msg = {"role": "system", "content": "Rate your confidence: HIGH, MEDIUM, or LOW. If LOW, explain briefly.", _SYNTHETIC_TAG: True}
-        messages.append(reflect_msg)
-        reflect_chunks = llm.chat(messages, stream=False, tools=None)
-        reflect_response, _ = await _collect_stream(reflect_chunks, event_sink)
-        reflect_text = reflect_response.get("content", "")
-        if "LOW" in reflect_text.upper() and silent_count < MAX_SILENT_RETRIES:
-            messages.append(reflect_response)
-            retry_msg = {"role": "system", "content": "Your confidence is low. Try a different approach.", _SYNTHETIC_TAG: True}
-            messages.append(retry_msg)
-            chunks = llm.chat(messages, stream=True, think=LLM_THINK, tools=tools)
-            final_msg, _ = await _collect_stream(chunks, event_sink)
-            messages.append(final_msg)
-            if final_msg.get("content"):
-                log_response(final_msg["content"])
 
     return _clean_history(messages)

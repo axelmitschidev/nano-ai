@@ -59,3 +59,26 @@ def _enforce_limit():
     if len(lines) > _MAX_ENTRIES:
         with open(_MEMORY_PATH, "w") as f:
             f.writelines(lines[-_MAX_ENTRIES:])
+
+
+# --- Agent scratchpad for tracking progress on long tasks ---
+
+_NOTES_PATH = os.path.join(WORKSPACE_DIR, ".agent_notes.md")
+
+
+def note_progress(action: str, content: str = "") -> str:
+    """Agent scratchpad — track progress on long tasks."""
+    if action == "read":
+        if not os.path.exists(_NOTES_PATH):
+            return "No notes yet."
+        with open(_NOTES_PATH, "r") as f:
+            return f.read() or "Notes are empty."
+    if action == "append":
+        with open(_NOTES_PATH, "a") as f:
+            f.write(f"- {content}\n")
+        return f"Note added: {content}"
+    if action == "clear":
+        if os.path.exists(_NOTES_PATH):
+            os.remove(_NOTES_PATH)
+        return "Notes cleared."
+    return "ERROR: action must be 'read', 'append', or 'clear'."
