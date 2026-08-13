@@ -1,0 +1,10 @@
+provenance: "0.1"
+name: "nano-ai"
+description: "Autonomous local AI agent with stealth web browsing, sandboxed code execution, and persistent memory."
+capabilities:
+  - read:web
+  - write:code
+  - execute:code
+constraints:
+  - no:pii
+  - no:financial:transact
